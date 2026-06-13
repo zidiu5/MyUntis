@@ -1,4 +1,4 @@
-name: Build APK
+name: Build & Release APK
 
 on:
   push:
@@ -7,6 +7,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Wichtig: Gibt GitHub das Recht, ein Release zu erstellen
 
     steps:
       - name: Checkout code
@@ -24,8 +26,14 @@ jobs:
       - name: Build Debug APK
         run: ./gradlew assembleDebug
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - name: Create Release and Upload APK
+        uses: softprops/action-gh-release@v2
         with:
-          name: MyUntis-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          tag_name: latest
+          name: "MyUntis Neueste Version"
+          body: "Automatisch aktualisierte Version direkt aus dem Master-Branch."
+          draft: false
+          prerelease: false
+          files: app/build/outputs/apk/debug/app-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

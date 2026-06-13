@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Backup rules: defines what gets backed up to Google Drive.
+    We exclude sensitive login data from backups for security.
+-->
+<full-backup-content>
+    <!-- Don't back up the DataStore files that contain passwords -->
+    <exclude domain="file" path="datastore"/>
+</full-backup-content>

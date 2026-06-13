@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base theme: no action bar, Compose handles everything -->
+    <style name="Theme.MyUntis" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Status bar is transparent (edge-to-edge) -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <!-- Splash screen theme: shown before Activity loads -->
+    <style name="Theme.MyUntis.SplashScreen" parent="Theme.SplashScreen">
+        <!-- Background color during splash -->
+        <item name="windowSplashScreenBackground">#1565C0</item>
+        <!-- Post-splash theme: switches to main theme after animation -->
+        <item name="postSplashScreenTheme">@style/Theme.MyUntis</item>
+    </style>
+</resources>

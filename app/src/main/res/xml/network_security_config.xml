@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Netzwerk-Sicherheitskonfiguration.
+    Erlaubt HTTPS-Verbindungen zu WebUntis-Servern.
+    Seit Android 9 werden HTTP-Verbindungen standardmäßig blockiert.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <!-- WebUntis verwendet immer HTTPS -->
+        <domain includeSubdomains="true">webuntis.com</domain>
+    </domain-config>
+</network-security-config>

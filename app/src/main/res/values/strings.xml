@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MyUntis</string>
+
+    <!-- Login Screen -->
+    <string name="login_title">Willkommen</string>
+    <string name="login_subtitle">Melde dich mit deinem Untis-Konto an</string>
+    <string name="login_school_hint">Schule (z.B. htl-imst)</string>
+    <string name="login_username_hint">Benutzername</string>
+    <string name="login_password_hint">Passwort</string>
+    <string name="login_button">Anmelden</string>
+    <string name="login_loading">Anmelden...</string>
+
+    <!-- Navigation -->
+    <string name="nav_dashboard">Dashboard</string>
+    <string name="nav_timetable">Stundenplan</string>
+    <string name="nav_homework">Hausaufgaben</string>
+    <string name="nav_grades">Noten</string>
+    <string name="nav_absences">Fehlstunden</string>
+    <string name="nav_messages">Nachrichten</string>
+    <string name="nav_settings">Einstellungen</string>
+
+    <!-- Common -->
+    <string name="error_network">Keine Internetverbindung</string>
+    <string name="error_login">Login fehlgeschlagen. Bitte Daten prüfen.</string>
+    <string name="loading">Laden...</string>
+    <string name="retry">Erneut versuchen</string>
+    <string name="logout">Abmelden</string>
+</resources>

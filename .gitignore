@@ -1,0 +1,24 @@
+# Android
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Keystore – NIEMALS committen!
+*.jks
+*.keystore
+keystore.properties
+
+# Build outputs
+app/build/
+build/
+
+# OS
+.DS_Store
+Thumbs.db

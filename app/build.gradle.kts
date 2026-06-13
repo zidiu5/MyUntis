@@ -27,6 +27,13 @@ android {
         targetSdk     = 35
         versionCode   = 1
         versionName   = "1.0.0"
+
+        applicationVariants.all {
+            outputs.all {
+                val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+                output.outputFileName = "MyUntis-${name}.apk"
+            }
+        }
     }
 
     // ── Signing ─────────────────────────────────────────────

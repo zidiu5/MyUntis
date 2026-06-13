@@ -11,7 +11,6 @@
 # Gson (JSON Modelle)
 -keepattributes Signature
 -keepattributes EnclosingMethod
--keep class sun.misc.Unsafe { *; }
 -keep class com.google.gson.** { *; }
 -keep class * implements com.google.gson.TypeAdapterFactory
 -keep class * implements com.google.gson.JsonSerializer

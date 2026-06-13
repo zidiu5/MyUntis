@@ -42,7 +42,7 @@ class DataStoreManager @Inject constructor(
     // This prevents type mismatches at compile time.
     companion object {
         val KEY_USERNAME = stringPreferencesKey("username")
-        val KEY_PASSWORD = stringPreferencesKey("password")         // TODO: encrypt in prod
+        val KEY_PASSWORD = stringPreferencesKey("password")
         val KEY_SCHOOL = stringPreferencesKey("school")
         val KEY_SERVER = stringPreferencesKey("server")             // e.g., "herakles.webuntis.com"
         val KEY_SESSION_ID = stringPreferencesKey("session_id")

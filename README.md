@@ -11,4 +11,4 @@ Eine inoffizielle Android-App für WebUntis, entwickelt mit Jetpack Compose.
 
 # MyUntis App
 
-[![Download APK](https://img.shields.io/badge/Download-APK-green?style=for-the-badge&logo=android)](https://github.com/zidiu5/MyUntis/releases/download/latest/MyUntis-debug.apk)
+[![Download APK](https://img.shields.io/badge/Download-APK-green?style=for-the-badge&logo=android)](https://github.com/zidiu5/MyUntis/releases/download/latest/MyUntis.apk)

@@ -208,4 +208,17 @@ interface UntisApiService {
         @Header("Authorization") bearer: String
     ): Response<ClassRegResponse>
 
+    // Timetable filter – resolves student ID for parent accounts
+    @GET
+    suspend fun getTimetableFilter(
+        @Url url: String,
+        @Header("Cookie") sessionCookie: String
+    ): Response<TimetableFilterResponse>
+
+    // Same but with Bearer token
+    @GET
+    suspend fun getTimetableFilterBearer(
+        @Url url: String,
+        @Header("Authorization") bearer: String
+    ): Response<TimetableFilterResponse>
 }

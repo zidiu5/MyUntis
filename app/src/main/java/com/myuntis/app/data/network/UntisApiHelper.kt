@@ -199,4 +199,12 @@ object UntisApiHelper {
     fun buildSchoolSearchRequest(term: String) = SchoolSearchRequest(
         params = listOf(SchoolSearchParam(search = term))
     )
+
+    fun buildTimetableFilterUrl(server: String): String {
+        val host  = server.trim().lowercase().removeSuffix(".webuntis.com")
+        val start = LocalDate.now().toString()
+        val end   = LocalDate.now().plusWeeks(1).toString()
+        return "https://$host.webuntis.com/WebUntis/api/rest/view/v1/timetable/filter" +
+                "?resourceType=STUDENT&timetableType=MY_TIMETABLE&start=$start&end=$end"
+    }
 }

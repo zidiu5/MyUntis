@@ -66,3 +66,20 @@ data class RestPositionEntity(
     @SerializedName("displayName")      val displayName: String,
     @SerializedName("displayNameLabel") val displayNameLabel: String? = null
 )
+
+// Timetable filter – used to resolve student ID for parent accounts
+// GET /WebUntis/api/rest/view/v1/timetable/filter?resourceType=STUDENT&...
+data class TimetableFilterResponse(
+    @SerializedName("preSelected") val preSelected: FilterPreSelected?,
+    @SerializedName("students")    val students: List<FilterStudent> = emptyList()
+)
+
+data class FilterPreSelected(
+    @SerializedName("id")          val id: Int,
+    @SerializedName("displayName") val displayName: String = "",
+    @SerializedName("longName")    val longName: String = ""
+)
+
+data class FilterStudent(
+    @SerializedName("student") val student: FilterPreSelected?
+)

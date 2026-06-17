@@ -51,10 +51,11 @@ data class LoginParams(
 
 // Login response result
 data class LoginResult(
-    @SerializedName("sessionId") val sessionId: String,
-    @SerializedName("personType") val personType: Int,    // 2=Teacher, 5=Student
-    @SerializedName("personId") val personId: Int,
-    @SerializedName("klasseId") val klasseId: Int? = null  // Class ID for students
+    @SerializedName("sessionId") val sessionId: String? = null,
+    @SerializedName("personType") val personType: Int? = null,    // 2=Teacher, 5=Student
+    @SerializedName("personId") val personId: Int? = null,
+    @SerializedName("klasseId") val klasseId: Int? = null,  // Class ID for students
+    @SerializedName("personName") val personName: String? = null
 )
 
 // ----- CURRENT USER INFO -----

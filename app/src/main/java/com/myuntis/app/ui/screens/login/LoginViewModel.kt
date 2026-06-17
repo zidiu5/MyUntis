@@ -3,57 +3,53 @@ package com.myuntis.app.ui.screens.login
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.network.NetworkResult
+import com.myuntis.app.data.network.UntisApiHelper
+import com.myuntis.app.data.network.UntisApiService
+import com.myuntis.app.data.network.model.SchoolResult
 import com.myuntis.app.data.repository.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class LoginUiState(
-    val school: String = "", val server: String = "",
-    val username: String = "", val password: String = "",
-    val showPassword: Boolean = false,
-    val isLoading: Boolean = false,
-    val errorMessage: String? = null,
-    val isLoginSuccessful: Boolean = false
+    // School search
+    val schoolSearchQuery: String       = "",
+    val schoolResults: List<SchoolResult> = emptyList(),
+    val isSearching: Boolean            = false,
+    val selectedSchool: SchoolResult?   = null,
+    // Credentials
+    val username: String                = "",
+    val password: String                = "",
+    val showPassword: Boolean           = false,
+    // Status
+    val isLoading: Boolean              = false,
+    val errorMessage: String?           = null,
+    val isLoginSuccessful: Boolean      = false
 )
-
-sealed class LoginEvent {
-    data class SchoolChanged(val value: String)    : LoginEvent()
-    data class ServerChanged(val value: String)    : LoginEvent()
-    data class UsernameChanged(val value: String)  : LoginEvent()
-    data class PasswordChanged(val value: String)  : LoginEvent()
-    object TogglePasswordVisibility                : LoginEvent()
-    object PerformLogin                            : LoginEvent()
-    object ClearError                              : LoginEvent()
-}
 
 @HiltViewModel
 class LoginViewModel @Inject constructor(
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val apiService: UntisApiService
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LoginUiState())
     val uiState: StateFlow<LoginUiState> = _uiState.asStateFlow()
 
+    private var searchJob: Job? = null
+
     init { tryAutoLogin() }
 
-    // On every app start: try silent re-login with saved credentials.
-    // This ensures the JSESSIONID and Bearer token are always fresh.
+    // ── Auto-login with saved credentials ────────────────────
     private fun tryAutoLogin() {
         viewModelScope.launch {
-            val saved = authRepository.getSavedCredentials()
-            if (saved == null || saved.username.isBlank() || saved.password.isBlank()) return@launch
+            val saved = authRepository.getSavedCredentials() ?: return@launch
+            if (saved.username.isBlank() || saved.password.isBlank()) return@launch
 
-            // Pre-fill the form in case auto-login fails
-            _uiState.update {
-                it.copy(
-                    school   = saved.school,   server   = saved.server,
-                    username = saved.username, password = saved.password,
-                    isLoading = true
-                )
-            }
-
+            _uiState.update { it.copy(isLoading = true) }
             when (authRepository.login(saved.username, saved.password, saved.school, saved.server)) {
                 is NetworkResult.Success ->
                     _uiState.update { it.copy(isLoading = false, isLoginSuccessful = true) }
@@ -63,35 +59,95 @@ class LoginViewModel @Inject constructor(
         }
     }
 
-    fun onEvent(event: LoginEvent) {
-        when (event) {
-            is LoginEvent.SchoolChanged    -> _uiState.update { it.copy(school    = event.value, errorMessage = null) }
-            is LoginEvent.ServerChanged    -> _uiState.update { it.copy(server    = event.value, errorMessage = null) }
-            is LoginEvent.UsernameChanged  -> _uiState.update { it.copy(username  = event.value, errorMessage = null) }
-            is LoginEvent.PasswordChanged  -> _uiState.update { it.copy(password  = event.value, errorMessage = null) }
-            is LoginEvent.TogglePasswordVisibility -> _uiState.update { it.copy(showPassword = !it.showPassword) }
-            is LoginEvent.PerformLogin     -> performLogin()
-            is LoginEvent.ClearError       -> _uiState.update { it.copy(errorMessage = null) }
+    // ── School search with 400ms debounce ────────────────────
+    fun onSchoolSearchChanged(query: String) {
+        _uiState.update {
+            it.copy(
+                schoolSearchQuery = query,
+                selectedSchool    = null,
+                errorMessage      = null
+            )
+        }
+        searchJob?.cancel()
+        if (query.length < 2) {
+            _uiState.update { it.copy(schoolResults = emptyList(), isSearching = false) }
+            return
+        }
+        searchJob = viewModelScope.launch {
+            delay(400)
+            _uiState.update { it.copy(isSearching = true) }
+            try {
+                val url = UntisApiHelper.buildSchoolSearchUrl()
+                val req = UntisApiHelper.buildSchoolSearchRequest(query)
+                val schools = apiService.searchSchools(url, req)
+                    .body()?.result?.schools ?: emptyList()
+                _uiState.update { it.copy(isSearching = false, schoolResults = schools) }
+            } catch (_: Exception) {
+                _uiState.update { it.copy(isSearching = false, schoolResults = emptyList()) }
+            }
         }
     }
 
-    private fun performLogin() {
-        val s = _uiState.value
-        val err = when {
-            s.server.isBlank()   -> "Bitte Server eingeben"
-            s.school.isBlank()   -> "Bitte Schule eingeben"
-            s.username.isBlank() -> "Bitte Benutzername eingeben"
-            s.password.isBlank() -> "Bitte Passwort eingeben"
-            else                 -> null
+    fun onSchoolSelected(school: SchoolResult) {
+        _uiState.update {
+            it.copy(
+                selectedSchool    = school,
+                schoolSearchQuery = school.displayName,
+                schoolResults     = emptyList(),
+                isSearching       = false
+            )
         }
-        if (err != null) { _uiState.update { it.copy(errorMessage = err) }; return }
+    }
+
+    fun clearSchoolSelection() {
+        _uiState.update {
+            it.copy(selectedSchool = null, schoolSearchQuery = "", schoolResults = emptyList())
+        }
+    }
+
+    fun onUsernameChanged(value: String) =
+        _uiState.update { it.copy(username = value, errorMessage = null) }
+
+    fun onPasswordChanged(value: String) =
+        _uiState.update { it.copy(password = value, errorMessage = null) }
+
+    fun togglePasswordVisibility() =
+        _uiState.update { it.copy(showPassword = !it.showPassword) }
+
+    fun clearError() =
+        _uiState.update { it.copy(errorMessage = null) }
+
+    // ── Login ─────────────────────────────────────────────────
+    fun performLogin() {
+        val s = _uiState.value
+
+        val school = s.selectedSchool ?: run {
+            _uiState.update { it.copy(errorMessage = "Bitte wähle zuerst eine Schule aus") }
+            return
+        }
+        if (s.username.isBlank()) {
+            _uiState.update { it.copy(errorMessage = "Bitte Benutzername eingeben") }
+            return
+        }
+        if (s.password.isBlank()) {
+            _uiState.update { it.copy(errorMessage = "Bitte Passwort eingeben") }
+            return
+        }
 
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            when (val r = authRepository.login(s.username.trim(), s.password, s.school.trim(), s.server.trim())) {
-                is NetworkResult.Success -> _uiState.update { it.copy(isLoading = false, isLoginSuccessful = true) }
-                is NetworkResult.Error   -> _uiState.update { it.copy(isLoading = false, errorMessage = r.message) }
-                else -> _uiState.update { it.copy(isLoading = false) }
+            when (val r = authRepository.login(
+                username = s.username.trim(),
+                password = s.password,
+                school   = school.loginName,   // "lbs-brixen"
+                server   = school.server       // "lbs-brixen.webuntis.com"
+            )) {
+                is NetworkResult.Success ->
+                    _uiState.update { it.copy(isLoading = false, isLoginSuccessful = true) }
+                is NetworkResult.Error ->
+                    _uiState.update { it.copy(isLoading = false, errorMessage = r.message) }
+                else ->
+                    _uiState.update { it.copy(isLoading = false) }
             }
         }
     }

@@ -11,6 +11,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.myuntis.app.ui.screens.login.LoginScreen
 import com.myuntis.app.ui.screens.main.MainScreen
+import com.myuntis.app.ui.screens.classreg.ClassRegScreen
+import com.myuntis.app.ui.screens.exams.ExamsScreen
 
 // =============================================================
 // APP NAV GRAPH
@@ -71,16 +73,26 @@ fun AppNavGraph() {
         }
 
         // ---- MAIN (with bottom navigation) ----
+        // ---- MAIN (with bottom navigation) ----
         composable(Screen.Main.route) {
             MainScreen(
                 onLogout = {
                     navController.navigate(Screen.Login.route) {
-                        // Remove Main from backstack after logout
                         popUpTo(Screen.Main.route) { inclusive = true }
                         launchSingleTop = true
                     }
+                },
+                onNavigate = { route ->          // NEU: für ClassReg, Exams etc.
+                    navController.navigate(route)
                 }
             )
+        }
+
+        composable(Screen.ClassReg.route) {
+            ClassRegScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Screen.Exams.route) {
+            ExamsScreen(onBack = { navController.popBackStack() })
         }
     }
 }

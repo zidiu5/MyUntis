@@ -171,4 +171,32 @@ object UntisApiHelper {
         id = nextId(), method = "getCurrentSchoolYear",
         params = emptyMap<String, String>()
     )
+
+    fun buildClassRegUrl(
+        server: String, studentId: Int,
+        startDate: LocalDate, endDate: LocalDate
+    ): String {
+        val host  = server.trim().lowercase().removeSuffix(".webuntis.com")
+        val start = startDate.format(DateTimeFormatter.ofPattern("yyyyMMdd"))
+        val end   = endDate.format(DateTimeFormatter.ofPattern("yyyyMMdd"))
+        return "https://$host.webuntis.com/WebUntis/api/classreg/classregevents" +
+                "?startDate=$start&endDate=$end&studentId=$studentId"
+    }
+
+    fun buildExamsUrl(
+        server: String, studentId: Int,
+        startDate: LocalDate, endDate: LocalDate
+    ): String {
+        val host  = server.trim().lowercase().removeSuffix(".webuntis.com")
+        val start = startDate.format(DateTimeFormatter.ofPattern("yyyyMMdd"))
+        val end   = endDate.format(DateTimeFormatter.ofPattern("yyyyMMdd"))
+        return "https://$host.webuntis.com/WebUntis/api/exams" +
+                "?startDate=$start&endDate=$end&studentId=$studentId&withGrades=true&klasseId=-1"
+    }
+
+    fun buildSchoolSearchUrl() = "https://mobile.webuntis.com/ms/schoolquery2"
+
+    fun buildSchoolSearchRequest(term: String) = SchoolSearchRequest(
+        params = listOf(SchoolSearchParam(search = term))
+    )
 }

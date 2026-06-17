@@ -23,32 +23,44 @@ import com.myuntis.app.ui.screens.messages.MessagesScreen
 import com.myuntis.app.ui.screens.settings.SettingsScreen
 import com.myuntis.app.ui.screens.timetable.TimetableScreen
 
-// =============================================================
-// MAIN SCREEN
-// =============================================================
-// Container for the main app experience after login.
-// Contains a bottom NavigationBar and an inner NavHost.
-//
-// Two navigation controllers exist in our app:
-// 1. Outer NavController (in NavGraph): Login ↔ Main
-// 2. Inner NavController (here): Dashboard ↔ Timetable ↔ etc.
-// =============================================================
 @Composable
 fun MainScreen(
-    onLogout: () -> Unit           // Called when user logs out
+    onLogout: () -> Unit,
+    onNavigate: (String) -> Unit = {}
 ) {
-    // Inner NavController: only for bottom nav destinations
     val innerNavController = rememberNavController()
-
-    // Observe the current destination to highlight the active tab
-    val navBackStackEntry by innerNavController.currentBackStackEntryAsState()
+    val navBackStackEntry  by innerNavController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
+
+    // Routes that live INSIDE the bottom nav (inner NavController)
+    val innerRoutes = setOf(
+        Screen.Dashboard.route,
+        Screen.Timetable.route,
+        Screen.Homework.route,
+        Screen.Grades.route,
+        Screen.Messages.route,
+        Screen.Settings.route
+    )
+
+    // Smart navigate: bottom-nav routes → inner controller,
+    //                 classreg / exams  → outer controller (Root NavGraph)
+    val smartNavigate: (String) -> Unit = { route ->
+        if (route in innerRoutes) {
+            innerNavController.navigate(route) {
+                popUpTo(innerNavController.graph.findStartDestination().id) {
+                    saveState = true
+                }
+                launchSingleTop = true
+                restoreState    = true
+            }
+        } else {
+            // classreg, exams → handled by Root NavGraph
+            onNavigate(route)
+        }
+    }
 
     Scaffold(
         bottomBar = {
-            // =================================================
-            // MATERIAL 3 NAVIGATION BAR
-            // =================================================
             NavigationBar {
                 bottomNavItems.forEach { item ->
                     val isSelected = currentDestination?.hierarchy
@@ -56,58 +68,41 @@ fun MainScreen(
 
                     NavigationBarItem(
                         selected = isSelected,
-                        onClick = {
-                            innerNavController.navigate(item.screen.route) {
-                                // Pop up to start destination: avoids backstack buildup
-                                // when tapping bottom nav items multiple times
-                                popUpTo(innerNavController.graph.findStartDestination().id) {
-                                    saveState = true
-                                }
-                                // Don't create multiple copies of the same destination
-                                launchSingleTop = true
-                                // Restore state when re-selecting a tab
-                                restoreState = true
-                            }
-                        },
-                        icon = {
+                        onClick  = { smartNavigate(item.screen.route) },
+                        icon     = {
                             Icon(
                                 imageVector = if (isSelected) item.selectedIcon
                                 else item.unselectedIcon,
                                 contentDescription = item.label
                             )
                         },
-                        label = { Text(item.label) },
-                        alwaysShowLabel = true  // Show labels even when unselected
+                        label          = { Text(item.label) },
+                        alwaysShowLabel = true
                     )
                 }
             }
         }
     ) { innerPadding ->
-        // =================================================
-        // INNER NAV HOST
-        // =================================================
-        // This NavHost lives inside the Scaffold's content area,
-        // automatically padded to avoid overlap with the bottom bar.
         NavHost(
-            navController = innerNavController,
+            navController    = innerNavController,
             startDestination = Screen.Dashboard.route,
-            modifier = Modifier.padding(innerPadding),
-            // Smooth fade transition between tabs
-            enterTransition = { fadeIn(animationSpec = tween(200)) },
-            exitTransition  = { fadeOut(animationSpec = tween(200)) }
+            modifier         = Modifier.padding(innerPadding),
+            enterTransition  = { fadeIn(tween(200)) },
+            exitTransition   = { fadeOut(tween(200)) }
         ) {
             composable(Screen.Dashboard.route) {
-                DashboardScreen(
-                    onNavigateToSettings = {
-                        innerNavController.navigate(Screen.Settings.route)
-                    }
-                )
+                // Pass smartNavigate so Dashboard can reach ALL features:
+                // – bottom-nav items go through inner controller (no crash)
+                // – classreg / exams go through outer controller
+                DashboardScreen(onNavigate = smartNavigate)
             }
             composable(Screen.Timetable.route) { TimetableScreen() }
             composable(Screen.Homework.route)  { HomeworkScreen() }
             composable(Screen.Grades.route)    { GradesScreen() }
             composable(Screen.Messages.route)  { MessagesScreen() }
-            composable(Screen.Settings.route)  { SettingsScreen(onLogout = onLogout) }
+            composable(Screen.Settings.route)  {
+                SettingsScreen(onLogout = onLogout)
+            }
         }
     }
 }

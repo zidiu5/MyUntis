@@ -4,6 +4,8 @@ import com.myuntis.app.data.network.model.*
 import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.*
+import com.myuntis.app.data.network.model.ClassRegResponse
+import com.myuntis.app.data.network.model.ExamsResponse
 
 // =============================================================
 // UNTIS API SERVICE
@@ -59,6 +61,13 @@ interface UntisApiService {
         @Header("Cookie") sessionCookie: String,
         @Body request: JsonRpcRequest
     ): Response<JsonRpcResponse<List<ApiAbsence>>>
+
+    // School search – no auth required, public API
+    @POST
+    suspend fun searchSchools(
+        @Url url: String,
+        @Body request: SchoolSearchRequest
+    ): Response<SchoolSearchResponse>
 
     @GET
     suspend fun getMessages(
@@ -180,4 +189,23 @@ interface UntisApiService {
         @Url url: String,
         @Header("Authorization") bearer: String
     ): Response<AbsencesStudentsResponse>
+
+    @GET
+    suspend fun getClassRegEvents(
+        @Url url: String,
+        @Header("Cookie") sessionCookie: String
+    ): Response<ClassRegResponse>
+
+    @GET
+    suspend fun getExams(
+        @Url url: String,
+        @Header("Cookie") sessionCookie: String
+    ): Response<ExamsResponse>
+
+    @GET
+    suspend fun getClassRegEventsBearer(
+        @Url url: String,
+        @Header("Authorization") bearer: String
+    ): Response<ClassRegResponse>
+
 }

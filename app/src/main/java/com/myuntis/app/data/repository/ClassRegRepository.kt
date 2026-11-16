@@ -42,83 +42,27 @@ class ClassRegRepository @Inject constructor(
 
             val url = UntisApiHelper.buildClassRegUrl(server, studentId, startDate, endDate)
 
-            // Step 1: try with Cookie
-            val cookieResp = try { apiService.getClassRegEvents(url, cookie) }
-            catch (_: Exception) { null }
-
-            if (cookieResp?.isSuccessful == true) {
-                val rows = cookieResp.body()?.data?.rows ?: emptyList()
-                if (rows.isNotEmpty()) {
-                    return NetworkResult.Success(mapRows(rows))
-                }
-                // rows empty → session probably expired, try Bearer below
+            // 1) Cookie
+            val c = runCatching { apiService.getClassRegEvents(url, cookie) }.getOrNull()
+            c?.takeIf { it.isSuccessful }?.body()?.data?.let {
+                return NetworkResult.Success(mapRows(it.rows))
             }
 
-            // Step 2: get fresh Bearer token and retry
+            // 2) Bearer
             val bearer = fetchFreshBearer(server, cookie)
                 ?: return NetworkResult.Error("Keine Berechtigung. Bitte neu anmelden.")
+            val b = runCatching {
+                apiService.getClassRegEventsBearer(url, "Bearer $bearer")
+            }.getOrNull()
+            b?.takeIf { it.isSuccessful }?.body()?.data?.let {
+                return NetworkResult.Success(mapRows(it.rows))
+            }
 
-            val bearerResp = try {
-                apiService.getClassRegEvents(url, "$bearer")
-            } catch (_: Exception) { null }
-
-            // Note: we reuse getClassRegEvents with a cookie header.
-            // Since the API accepts either, we pass the Bearer as a
-            // "Cookie" value which some WebUntis versions accept,
-            // OR we simply retry with a fresh session login.
-            // Best approach: just re-login silently.
-            val refreshed = refreshAndRetry(
-                server = server,
-                credentials = credentials,
-                studentId = studentId,
-                startDate = startDate,
-                endDate = endDate
-            )
-
-            if (refreshed != null) return refreshed
-
-            NetworkResult.Success(emptyList())
+            return NetworkResult.Error("Klassenbuch konnte nicht geladen werden.")
 
         } catch (e: Exception) {
             NetworkResult.Error(e.localizedMessage ?: "Fehler beim Laden")
         }
-    }
-
-    private suspend fun refreshAndRetry(
-        server: String,
-        credentials: com.myuntis.app.data.local.LoginCredentials,
-        studentId: Int,
-        startDate: LocalDate,
-        endDate: LocalDate
-    ): NetworkResult<List<ClassRegEntry>>? {
-        return try {
-            // Re-authenticate to get a fresh session cookie
-            val rpcUrl = UntisApiHelper.buildJsonRpcUrl(server, credentials.school)
-            val loginResp = apiService.authenticate(
-                url     = rpcUrl,
-                request = UntisApiHelper.buildLoginRequest(credentials.username, credentials.password)
-            )
-            val newSessionId = loginResp.body()?.result?.sessionId
-                ?: return null
-
-            dataStore.saveSession(
-                sessionId  = newSessionId,
-                personId   = dataStore.userProfile.first().personId,
-                personType = dataStore.userProfile.first().personType,
-                klasseId   = dataStore.userProfile.first().klasseId,
-                fullName   = dataStore.userProfile.first().fullName,
-                className  = dataStore.userProfile.first().className
-            )
-
-            val newCookie = newSessionId.let { "JSESSIONID=$it" }
-            val url       = UntisApiHelper.buildClassRegUrl(server, studentId, startDate, endDate)
-            val resp      = apiService.getClassRegEvents(url, newCookie)
-
-            if (resp.isSuccessful) {
-                val rows = resp.body()?.data?.rows ?: emptyList()
-                NetworkResult.Success(mapRows(rows))
-            } else null
-        } catch (_: Exception) { null }
     }
 
     private fun mapRows(rows: List<com.myuntis.app.data.network.model.ClassRegRow>): List<ClassRegEntry> {

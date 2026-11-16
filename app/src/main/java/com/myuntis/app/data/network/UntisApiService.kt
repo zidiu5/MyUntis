@@ -6,6 +6,10 @@ import retrofit2.Response
 import retrofit2.http.*
 import com.myuntis.app.data.network.model.ClassRegResponse
 import com.myuntis.app.data.network.model.ExamsResponse
+import com.google.gson.JsonObject
+import okhttp3.RequestBody
+import retrofit2.http.PATCH
+import retrofit2.http.DELETE
 
 // =============================================================
 // UNTIS API SERVICE
@@ -68,6 +72,53 @@ interface UntisApiService {
         @Url url: String,
         @Body request: SchoolSearchRequest
     ): Response<SchoolSearchResponse>
+
+    // ── Schwarzes Brett (board.zidiu1.com) ────────────────────────
+    @POST
+    suspend fun boardAuth(
+        @Url url: String,
+        @Header("Authorization") authorization: String,
+        @Header("X-Untis-Host") untisHost: String
+    ): Response<BoardAuthResponse>
+
+    @GET
+    suspend fun boardGetPosts(
+        @Url url: String,
+        @Header("Authorization") authorization: String
+    ): Response<BoardPostsResponse>
+
+    @POST
+    suspend fun boardCreatePost(
+        @Url url: String,
+        @Header("Authorization") authorization: String,
+        @Body body: RequestBody
+    ): Response<BoardPost>
+
+    @PATCH
+    suspend fun boardUpdatePost(
+        @Url url: String,
+        @Header("Authorization") authorization: String,
+        @Body body: RequestBody
+    ): Response<BoardPost>
+
+    @PATCH
+    suspend fun boardUpdateMe(
+        @Url url: String,
+        @Header("Authorization") authorization: String,
+        @Body body: RequestBody
+    ): Response<ResponseBody>
+
+    @DELETE
+    suspend fun boardDeletePost(
+        @Url url: String,
+        @Header("Authorization") authorization: String
+    ): Response<ResponseBody>
+
+    @POST
+    suspend fun boardReportPost(
+        @Url url: String,
+        @Header("Authorization") authorization: String
+    ): Response<ResponseBody>
 
     @GET
     suspend fun getMessages(
@@ -221,4 +272,11 @@ interface UntisApiService {
         @Url url: String,
         @Header("Authorization") bearer: String
     ): Response<TimetableFilterResponse>
+
+    // Mensa plans (api.zidiu1.com, read-only key)
+    @GET
+    suspend fun getMensaPlans(
+        @Url url: String,
+        @Header("X-API-Key") apiKey: String
+    ): Response<JsonObject>
 }

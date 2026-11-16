@@ -1,9 +1,11 @@
 package com.myuntis.app.data.repository
 
+import android.os.SystemClock
 import com.myuntis.app.data.local.DataStoreManager
 import com.myuntis.app.data.network.NetworkResult
 import com.myuntis.app.data.network.UntisApiHelper
 import com.myuntis.app.data.network.UntisApiService
+import com.myuntis.app.domain.model.SavedAccount
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -17,11 +19,16 @@ class AuthRepository @Inject constructor(
     private val dataStore: DataStoreManager
 ) {
 
+    // Time of the last successful login (SystemClock, not persisted)
+    @Volatile var lastLoginAt: Long = 0L
+        private set
+
     suspend fun login(
         username: String,
         password: String,
         school: String,
-        server: String
+        server: String,
+        schoolDisplayName: String = ""
     ): NetworkResult<Unit> {
         return try {
             val url = UntisApiHelper.buildJsonRpcUrl(server, school)
@@ -37,6 +44,16 @@ class AuthRepository @Inject constructor(
 
             val sessionId  = result.sessionId  ?: return NetworkResult.Error("Keine Session")
             val personType = result.personType ?: PERSON_TYPE_STUDENT
+
+            // Another account than before? → throw away the old account's cached data
+            val accountId  = SavedAccount.makeId(server, username)
+            val previousId = dataStore.activeAccountId.first()
+            if (previousId != null && previousId != accountId) {
+                val previous = dataStore.accounts.first().firstOrNull { it.id == previousId }
+                dataStore.clearUserData()
+                // Different school → different school year IDs
+                if (previous?.server != server) dataStore.saveSchoolYearId(0)
+            }
 
             // Save credentials for auto-login
             dataStore.saveLoginCredentials(username, password, school, server)
@@ -66,6 +83,21 @@ class AuthRepository @Inject constructor(
                 fullName   = result.personName ?: username,
                 className  = className
             )
+
+            val old = dataStore.accounts.first().firstOrNull { it.id == accountId }
+            dataStore.upsertAccount(
+                SavedAccount(
+                    id          = accountId,
+                    displayName = result.personName ?: username,
+                    className   = className,
+                    schoolName  = schoolDisplayName.ifBlank { old?.schoolName ?: "" },
+                    username    = username,
+                    password    = password,
+                    school      = school,
+                    server      = server
+                )
+            )
+            lastLoginAt = SystemClock.elapsedRealtime()
 
             NetworkResult.Success(Unit)
 
@@ -175,12 +207,27 @@ class AuthRepository @Inject constructor(
 
     suspend fun logout() {
         try {
-            val sessionId = dataStore.sessionId.first() ?: return
+            val sessionId = dataStore.sessionId.first()
             val creds = dataStore.loginCredentials.first()
-            val url   = UntisApiHelper.buildJsonRpcUrl(creds.server, creds.school)
-            apiService.logout(url, "JSESSIONID=$sessionId",
-                UntisApiHelper.buildLogoutRequest())
+            if (sessionId != null) {
+                val url = UntisApiHelper.buildJsonRpcUrl(creds.server, creds.school)
+                apiService.logout(url, "JSESSIONID=$sessionId",
+                    UntisApiHelper.buildLogoutRequest())
+            }
         } catch (_: Exception) {}
-        dataStore.clearAllData()
+
+        val activeId = dataStore.activeAccountId.first()
+        if (activeId != null) removeAccount(activeId) else dataStore.clearAllData()
+    }
+
+    /** Removes a saved account from this device. */
+    suspend fun removeAccount(accountId: String) {
+        val activeId = dataStore.activeAccountId.first()
+        dataStore.removeAccount(accountId)
+        if (dataStore.accounts.first().isEmpty()) {
+            dataStore.clearAllData()          // last account → wipe like before
+        } else if (accountId == activeId) {
+            dataStore.clearUserData()
+        }
     }
 }

@@ -25,6 +25,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.local.DataStoreManager
 import com.myuntis.app.data.repository.AuthRepository
+import com.myuntis.app.domain.model.SavedAccount
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -49,6 +50,12 @@ class SettingsViewModel @Inject constructor(
     val subjectColors: StateFlow<Map<String, String>> = dataStore.subjectColors
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
+    val accounts: StateFlow<List<SavedAccount>> = dataStore.accounts
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val activeAccountId: StateFlow<String?> = dataStore.activeAccountId
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
     private val _loggedOut = MutableStateFlow(false)
     val loggedOut = _loggedOut.asStateFlow()
 
@@ -64,9 +71,24 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { dataStore.setSubjectColor(subjectShort, "") }
     }
 
+    fun openAccountPicker() {
+        viewModelScope.launch {
+            dataStore.setLoginIntent("switch")
+            _loggedOut.value = true          // reuses the existing "go to login" navigation
+        }
+    }
+
+    fun addAccount() {
+        viewModelScope.launch {
+            dataStore.setLoginIntent("add")
+            _loggedOut.value = true
+        }
+    }
+
     fun logout() {
         viewModelScope.launch {
-            authRepository.logout()
+            authRepository.logout()          // removes the CURRENT account
+            if (dataStore.accounts.first().isNotEmpty()) dataStore.setLoginIntent("switch")
             _loggedOut.value = true
         }
     }
@@ -84,6 +106,9 @@ fun SettingsScreen(
     val isDarkMode    by viewModel.isDarkMode.collectAsState()
     val knownSubjects by viewModel.knownSubjects.collectAsState()
     val subjectColors by viewModel.subjectColors.collectAsState()
+    val accounts      by viewModel.accounts.collectAsState()
+    val activeId      by viewModel.activeAccountId.collectAsState()
+    val activeAccount = accounts.firstOrNull { it.id == activeId }
 
     LaunchedEffect(loggedOut) { if (loggedOut) onLogout() }
 
@@ -97,7 +122,7 @@ fun SettingsScreen(
             onDismissRequest = { showLogoutDialog = false },
             icon  = { Icon(Icons.Outlined.Logout, null) },
             title = { Text("Abmelden?") },
-            text  = { Text("Möchtest du dich wirklich abmelden?") },
+            text  = { Text("Dieses Konto wird von diesem Gerät entfernt. Du kannst es jederzeit wieder hinzufügen.") },
             confirmButton = {
                 Button(
                     onClick = { showLogoutDialog = false; viewModel.logout() },
@@ -308,7 +333,54 @@ fun SettingsScreen(
             }
         }
 
-        // ── Account ───────────────────────────────────────────
+        // ── Accounts ─────────────────────────────────────────
+        item {
+            Spacer(Modifier.height(8.dp))
+            SectionLabel("Konten")
+            Card(
+                shape  = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column {
+                    activeAccount?.let { acc ->
+                        ListItem(
+                            headlineContent = { Text(acc.displayName, fontWeight = FontWeight.SemiBold) },
+                            supportingContent = {
+                                Text(
+                                    listOf(acc.className, acc.schoolName)
+                                        .filter { it.isNotBlank() }.joinToString(" · ")
+                                        .ifBlank { acc.username },
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            },
+                            leadingContent = { Icon(Icons.Outlined.Person, null) }
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+                    }
+                    if (accounts.size >= 2) {
+                        ListItem(
+                            headlineContent   = { Text("Konto wechseln") },
+                            supportingContent = { Text("${accounts.size} Konten gespeichert",
+                                style = MaterialTheme.typography.bodySmall) },
+                            leadingContent    = { Icon(Icons.Outlined.SwitchAccount, null) },
+                            trailingContent   = { Icon(Icons.Outlined.ChevronRight, null) },
+                            modifier = Modifier.clickable { viewModel.openAccountPicker() }
+                        )
+                        HorizontalDivider(modifier = Modifier.padding(start = 56.dp))
+                    }
+                    ListItem(
+                        headlineContent = { Text("Konto hinzufügen") },
+                        leadingContent  = { Icon(Icons.Outlined.PersonAdd, null) },
+                        trailingContent = { Icon(Icons.Outlined.ChevronRight, null) },
+                        modifier = Modifier.clickable { viewModel.addAccount() }
+                    )
+                }
+            }
+        }
+
+        // ── Account (logout) ──────────────────────────────────
         item {
             Spacer(Modifier.height(8.dp))
             SectionLabel("Konto")

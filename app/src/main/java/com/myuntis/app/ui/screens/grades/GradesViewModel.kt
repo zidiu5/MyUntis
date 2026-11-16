@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.network.NetworkResult
 import com.myuntis.app.data.repository.GradesRepository
+import com.myuntis.app.data.repository.SchoolYearOption
+import com.myuntis.app.data.repository.SessionManager
 import com.myuntis.app.domain.model.Absence
 import com.myuntis.app.domain.model.AbsenceStatistics
 import com.myuntis.app.domain.model.SubjectWithGrades
@@ -24,7 +26,9 @@ data class GradesUiState(
     val isLoadingAbsences: Boolean = true,
     val absences: List<Absence> = emptyList(),
     val absenceStats: AbsenceStatistics = AbsenceStatistics(0, 0, 0),
-    val absencesError: String? = null
+    val absencesError: String? = null,
+    val schoolYears: List<SchoolYearOption> = emptyList(),
+    val selectedYearId: Int? = null,      // null = current school year
 ) {
     // Average of ALL individual grades (Realwert)
     val realwert: Float
@@ -53,34 +57,53 @@ data class GradesUiState(
 
 @HiltViewModel
 class GradesViewModel @Inject constructor(
-    private val repository: GradesRepository
+    private val repository: GradesRepository,
+    private val sessionManager: SessionManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(GradesUiState())
     val uiState: StateFlow<GradesUiState> = _uiState.asStateFlow()
 
-    init { loadGrades(); loadAbsences() }
+    init {
+        loadGrades(); loadAbsences()
+        // Reload after the session was renewed in the background
+        viewModelScope.launch {
+            sessionManager.sessionRenewed.collect { loadGrades(); loadAbsences() }
+        }
+    }
 
     fun setTab(tab: GradesTab)          = _uiState.update { it.copy(activeTab = tab) }
     fun setStatsTab(tab: StatsTab)      = _uiState.update { it.copy(activeStatsTab = tab) }
 
+    fun selectYear(yearId: Int?) {
+        _uiState.update { it.copy(selectedYearId = yearId) }
+        loadGrades()
+    }
+
     fun loadGrades() {
         viewModelScope.launch {
+            sessionManager.ensureFresh()
             _uiState.update { it.copy(isLoadingGrades = true, gradesError = null) }
-            when (val r = repository.getSubjectGrades()) {
+            when (val r = repository.getSubjectGrades(_uiState.value.selectedYearId)) {
                 is NetworkResult.Success -> _uiState.update {
                     it.copy(isLoadingGrades = false, subjects = r.data)
                 }
                 is NetworkResult.Error -> _uiState.update {
-                    it.copy(isLoadingGrades = false, gradesError = r.message)
+                    it.copy(isLoadingGrades = false, gradesError = r.message, subjects = emptyList())
                 }
                 else -> _uiState.update { it.copy(isLoadingGrades = false) }
+            }
+            // Load the year list once (needs the current year ID saved by the call above)
+            if (_uiState.value.schoolYears.isEmpty()) {
+                val years = repository.getAvailableSchoolYears()
+                _uiState.update { it.copy(schoolYears = years) }
             }
         }
     }
 
     fun loadAbsences() {
         viewModelScope.launch {
+            sessionManager.ensureFresh()
             _uiState.update { it.copy(isLoadingAbsences = true, absencesError = null) }
             when (val r = repository.getAbsences()) {
                 is NetworkResult.Success -> {

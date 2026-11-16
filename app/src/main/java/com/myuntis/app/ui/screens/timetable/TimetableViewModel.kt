@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.local.DataStoreManager
 import com.myuntis.app.data.network.NetworkResult
+import com.myuntis.app.data.repository.SessionManager
 import com.myuntis.app.data.repository.TimetableRepository
 import com.myuntis.app.domain.model.Lesson
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -43,7 +44,8 @@ data class TimetableUiState(
 @HiltViewModel
 class TimetableViewModel @Inject constructor(
     private val repository: TimetableRepository,
-    private val dataStore: DataStoreManager
+    private val dataStore: DataStoreManager,
+    private val sessionManager: SessionManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TimetableUiState())
@@ -55,6 +57,11 @@ class TimetableViewModel @Inject constructor(
             dataStore.subjectColors.collect { colors ->
                 _uiState.update { it.copy(subjectColors = colors) }
             }
+        }
+
+        // Reload after the session was renewed in the background
+        viewModelScope.launch {
+            sessionManager.sessionRenewed.collect { refresh() }
         }
 
         // Strategy:
@@ -86,6 +93,7 @@ class TimetableViewModel @Inject constructor(
      */
     private fun prefetchInBackground() {
         viewModelScope.launch {
+            sessionManager.ensureFresh()
             when (val r = repository.prefetchMultipleWeeks()) {
                 is NetworkResult.Success -> {
                     val byDate = r.data.groupBy { it.date }

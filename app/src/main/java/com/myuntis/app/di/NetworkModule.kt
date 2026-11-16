@@ -25,15 +25,6 @@ object NetworkModule {
     // =============================================================
     // HTML GUARD INTERCEPTOR
     // =============================================================
-    // WebUntis sometimes returns an HTML login page (200 OK) instead
-    // of JSON when the session is expired or the wrong auth method
-    // is used. Gson then crashes with "Expected BEGIN_OBJECT but was
-    // STRING" because HTML is not valid JSON.
-    //
-    // This interceptor detects HTML responses and replaces them with
-    // an empty JSON object {} so Gson can parse it without crashing.
-    // Our data classes map {} to null data fields, which we handle.
-    // =============================================================
     private val htmlGuardInterceptor = Interceptor { chain ->
         val response = chain.proceed(chain.request())
 
@@ -65,6 +56,9 @@ object NetworkModule {
                 HttpLoggingInterceptor.Level.HEADERS  // BODY logs too much, HEADERS enough
             else
                 HttpLoggingInterceptor.Level.NONE
+            // FIX: Hide sensitive auth headers from logcat
+            redactHeader("Cookie")
+            redactHeader("Authorization")
         }
 
         return OkHttpClient.Builder()

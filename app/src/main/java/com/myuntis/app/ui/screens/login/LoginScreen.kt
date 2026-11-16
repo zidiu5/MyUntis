@@ -6,11 +6,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,11 +32,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.myuntis.app.data.network.model.SchoolResult
+import com.myuntis.app.domain.model.SavedAccount
 
 @Composable
 fun LoginScreen(
@@ -56,29 +61,41 @@ fun LoginScreen(
                 )
             )
     ) {
-        if (uiState.isLoading && uiState.selectedSchool == null) {
-            // Auto-login splash
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text("MyUntis", style = MaterialTheme.typography.headlineLarge,
-                    fontWeight = FontWeight.Black, color = Color.White)
-                Spacer(Modifier.height(24.dp))
-                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(36.dp))
+        when {
+            // Splash: deciding what to show / logging into a saved account
+            uiState.isLoading && uiState.selectedSchool == null -> {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("MyUntis", style = MaterialTheme.typography.headlineLarge,
+                        fontWeight = FontWeight.Black, color = Color.White)
+                    Spacer(Modifier.height(24.dp))
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(36.dp))
+                }
             }
-        } else {
-            LoginContent(
-                uiState  = uiState,
-                onSearchChanged  = viewModel::onSchoolSearchChanged,
-                onSchoolSelected = viewModel::onSchoolSelected,
-                onClearSchool    = viewModel::clearSchoolSelection,
-                onUsernameChanged= viewModel::onUsernameChanged,
-                onPasswordChanged= viewModel::onPasswordChanged,
-                onTogglePw       = viewModel::togglePasswordVisibility,
-                onLogin          = viewModel::performLogin,
-                isLoggingIn      = uiState.isLoading
+
+            uiState.showAccountPicker -> AccountPicker(
+                accounts     = uiState.accounts,
+                errorMessage = uiState.errorMessage,
+                onSelect     = viewModel::onAccountSelected,
+                onAdd        = viewModel::onAddAccount,
+                onRemove     = viewModel::onRemoveAccount
+            )
+
+            else -> LoginContent(
+                uiState           = uiState,
+                onSearchChanged   = viewModel::onSchoolSearchChanged,
+                onSchoolSelected  = viewModel::onSchoolSelected,
+                onClearSchool     = viewModel::clearSchoolSelection,
+                onUsernameChanged = viewModel::onUsernameChanged,
+                onPasswordChanged = viewModel::onPasswordChanged,
+                onTogglePw        = viewModel::togglePasswordVisibility,
+                onLogin           = viewModel::performLogin,
+                isLoggingIn       = uiState.isLoading,
+                canGoBack         = uiState.canGoBack,
+                onBack            = viewModel::onBackToPicker
             )
         }
     }
@@ -94,7 +111,9 @@ private fun LoginContent(
     onPasswordChanged: (String) -> Unit,
     onTogglePw: () -> Unit,
     onLogin: () -> Unit,
-    isLoggingIn: Boolean
+    isLoggingIn: Boolean,
+    canGoBack: Boolean,
+    onBack: () -> Unit
 ) {
     val focusManager     = LocalFocusManager.current
     val usernameFocus    = remember { FocusRequester() }
@@ -113,7 +132,21 @@ private fun LoginContent(
             .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(Modifier.height(64.dp))
+        if (canGoBack) {
+            Row(Modifier.fillMaxWidth().padding(top = 40.dp)) {
+                TextButton(
+                    onClick = onBack,
+                    colors = ButtonDefaults.textButtonColors(contentColor = Color.White)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Kontoauswahl")
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        } else {
+            Spacer(Modifier.height(64.dp))
+        }
 
         // ── Logo + Title ─────────────────────────────────────
         Box(
@@ -440,5 +473,152 @@ private fun SchoolResultItem(school: SchoolResult, onClick: () -> Unit) {
         Icon(Icons.Outlined.ChevronRight, null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(16.dp))
+    }
+}
+
+// =============================================================
+// ACCOUNT PICKER
+// =============================================================
+@Composable
+private fun AccountPicker(
+    accounts: List<SavedAccount>,
+    errorMessage: String?,
+    onSelect: (SavedAccount) -> Unit,
+    onAdd: () -> Unit,
+    onRemove: (SavedAccount) -> Unit
+) {
+    var toRemove by remember { mutableStateOf<SavedAccount?>(null) }
+
+    toRemove?.let { acc ->
+        AlertDialog(
+            onDismissRequest = { toRemove = null },
+            title = { Text("Konto entfernen?") },
+            text  = {
+                Text("${acc.displayName} wird von diesem Gerät entfernt. " +
+                        "Du kannst das Konto jederzeit wieder hinzufügen.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = { onRemove(acc); toRemove = null },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Entfernen") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { toRemove = null }) { Text("Abbrechen") }
+            }
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(Modifier.height(64.dp))
+        Box(
+            modifier = Modifier.size(72.dp).clip(RoundedCornerShape(20.dp))
+                .background(Color.White.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Outlined.School, null, tint = Color.White, modifier = Modifier.size(40.dp))
+        }
+        Spacer(Modifier.height(16.dp))
+        Text("MyUntis", style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Black, color = Color.White)
+        Text("Welches Konto möchtest du öffnen?",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White.copy(alpha = 0.75f))
+        Spacer(Modifier.height(32.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape    = RoundedCornerShape(24.dp),
+            colors   = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            elevation = CardDefaults.cardElevation(8.dp)
+        ) {
+            Column {
+                accounts.forEachIndexed { index, acc ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .clickable { onSelect(acc) }
+                            .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier.size(44.dp).clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                acc.displayName.take(1).uppercase(),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(acc.displayName,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            val line2 = listOf(acc.className, acc.schoolName)
+                                .filter { it.isNotBlank() }.joinToString(" · ")
+                            if (line2.isNotBlank()) {
+                                Text(line2, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            // Username separates accounts with the same display name
+                            Text(acc.username, style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        IconButton(onClick = { toRemove = acc }) {
+                            Icon(Icons.Outlined.Delete, "Entfernen",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    if (index < accounts.lastIndex) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                        )
+                    }
+                }
+            }
+        }
+
+        errorMessage?.let { msg ->
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.errorContainer).padding(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Outlined.Error, null,
+                    tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                Text(msg, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer)
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        OutlinedButton(
+            onClick  = onAdd,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape    = RoundedCornerShape(14.dp),
+            colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+            border   = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.6f))
+        ) {
+            Icon(Icons.Outlined.Add, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Weiteres Konto hinzufügen")
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }

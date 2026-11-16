@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════
-// FILE: ui/screens/exams/ExamsScreen.kt
-// ═══════════════════════════════════════════════════════════════
-
 package com.myuntis.app.ui.screens.exams
 
 import androidx.compose.animation.animateContentSize
@@ -20,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -29,6 +26,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.network.NetworkResult
 import com.myuntis.app.data.repository.ExamRepository
+import com.myuntis.app.data.repository.SessionManager
 import com.myuntis.app.domain.model.Exam
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -49,16 +47,21 @@ data class ExamsUiState(
 
 @HiltViewModel
 class ExamsViewModel @Inject constructor(
-    private val repository: ExamRepository
+    private val repository: ExamRepository,
+    private val sessionManager: SessionManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ExamsUiState())
     val uiState: StateFlow<ExamsUiState> = _uiState.asStateFlow()
 
-    init { load() }
+    init {
+        load()
+        viewModelScope.launch { sessionManager.sessionRenewed.collect { load() } }
+    }
 
     fun load() {
         viewModelScope.launch {
+            sessionManager.ensureFresh()
             _uiState.update { it.copy(isLoading = true, error = null) }
             when (val r = repository.getExams()) {
                 is NetworkResult.Success ->
@@ -70,6 +73,7 @@ class ExamsViewModel @Inject constructor(
         }
     }
 }
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -239,17 +243,16 @@ private fun ExamCard(exam: Exam, dimmed: Boolean) {
         else      -> MaterialTheme.colorScheme.primary
     }
 
+    val surface = MaterialTheme.colorScheme.surface
+    val cardColor = if (isToday && !dimmed)
+        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f).compositeOver(surface)
+    else
+        surface
+
     Card(
         modifier  = Modifier.fillMaxWidth().clickable { expanded = !expanded },
         shape     = RoundedCornerShape(14.dp),
-        colors    = CardDefaults.cardColors(
-            containerColor = when {
-                isToday && !dimmed ->
-                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f)
-                else               ->
-                    MaterialTheme.colorScheme.surface
-            }
-        ),
+        colors    = CardDefaults.cardColors(containerColor = cardColor),
         elevation = CardDefaults.cardElevation(if (dimmed) 0.dp else 2.dp)
     ) {
         Column(

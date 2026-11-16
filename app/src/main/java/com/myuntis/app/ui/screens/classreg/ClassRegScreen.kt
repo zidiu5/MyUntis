@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -30,6 +31,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.network.NetworkResult
 import com.myuntis.app.data.repository.ClassRegRepository
+import com.myuntis.app.data.repository.SessionManager
 import com.myuntis.app.domain.model.ClassRegEntry
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -44,18 +46,25 @@ data class ClassRegUiState(
     val error: String?             = null
 )
 
+
+
 @HiltViewModel
 class ClassRegViewModel @Inject constructor(
-    private val repository: ClassRegRepository
+    private val repository: ClassRegRepository,
+    private val sessionManager: SessionManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ClassRegUiState())
     val uiState: StateFlow<ClassRegUiState> = _uiState.asStateFlow()
 
-    init { load() }
+    init {
+        load()
+        viewModelScope.launch { sessionManager.sessionRenewed.collect { load() } }
+    }
 
     fun load() {
         viewModelScope.launch {
+            sessionManager.ensureFresh()
             _uiState.update { it.copy(isLoading = true, error = null) }
             when (val r = repository.getEntries()) {
                 is NetworkResult.Success ->
@@ -151,15 +160,17 @@ private fun ClassRegEntryCard(entry: ClassRegEntry) {
     val dotColor = if (entry.isPersonal) Color(0xFFE65100) else MaterialTheme.colorScheme.primary
     val label    = if (entry.isPersonal) "Persönlich" else "Klasse"
 
+    val surface = MaterialTheme.colorScheme.surface
+    val cardColor = if (entry.isPersonal)
+    // Opaque tint: same look as 15 % red, but no shadow shining through
+        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f).compositeOver(surface)
+    else
+        surface
+
     Card(
         modifier  = Modifier.fillMaxWidth().clickable { expanded = !expanded },
         shape     = RoundedCornerShape(14.dp),
-        colors    = CardDefaults.cardColors(
-            containerColor = if (entry.isPersonal)
-                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.15f)
-            else
-                MaterialTheme.colorScheme.surface
-        ),
+        colors    = CardDefaults.cardColors(containerColor = cardColor),
         elevation = CardDefaults.cardElevation(1.dp)
     ) {
         Column(

@@ -4,5 +4,5 @@ plugins {
     // kotlin-compose ENTFERNT: nur Kotlin 2.0+
     alias(libs.plugins.hilt.android) apply false
     alias(libs.plugins.ksp) apply false
-    alias(libs.plugins.kotlin.serialization) apply false
+    // alias(libs.plugins.kotlin.serialization) apply false
 }

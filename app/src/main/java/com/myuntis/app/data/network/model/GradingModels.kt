@@ -30,12 +30,19 @@ data class GradingFinalMark(
 )
 
 data class GradingSchoolYear(
-    @SerializedName("id")           val id: Int,
+    @SerializedName("id")           val id: Int = 0,
     @SerializedName("name")         val name: String = "",
-    @SerializedName("schoolyearId") val schoolyearId: Int,
+    @SerializedName("schoolyearId") val schoolyearId: Int = 0,  // kann 0 sein bei manchen Servern
     @SerializedName("startDate")    val startDate: String = "",
     @SerializedName("endDate")      val endDate: String = ""
-)
+) {
+    // Use whichever is non-zero
+    val resolvedId: Int get() = when {
+        schoolyearId > 0 -> schoolyearId
+        id > 0           -> id
+        else             -> 0
+    }
+}
 
 // =============================================================
 // GRADING LESSON  –  /WebUntis/api/classreg/grade/grading/lesson

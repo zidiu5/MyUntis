@@ -6,7 +6,7 @@ plugins {
     // For Kotlin 1.9.x, composeOptions block is used instead
     alias(libs.plugins.hilt.android)
     alias(libs.plugins.ksp)
-    alias(libs.plugins.kotlin.serialization)
+    // alias(libs.plugins.kotlin.serialization)
 }
 
 // Load signing credentials from keystore.properties (not committed to git)
@@ -16,6 +16,9 @@ val keystoreProperties = Properties().apply {
         load(keystorePropertiesFile.inputStream())
     }
 }
+
+// FIX: Check if the file exists AND has a storeFile property to prevent CI crash
+val hasSigning = keystorePropertiesFile.exists() && keystoreProperties.containsKey("storeFile")
 
 android {
     namespace   = "com.myuntis.app"
@@ -39,9 +42,7 @@ android {
     // ── Signing ─────────────────────────────────────────────
     signingConfigs {
         create("release") {
-            // Falls keystore.properties nicht existiert (z.B. auf CI)
-            // → Build schlägt mit klarer Meldung fehl
-            if (keystorePropertiesFile.exists()) {
+            if (hasSigning) {
                 storeFile   = file(keystoreProperties["storeFile"] as String)
                 storePassword = keystoreProperties["storePassword"] as String
                 keyAlias    = keystoreProperties["keyAlias"] as String
@@ -59,7 +60,8 @@ android {
         getByName("release") {
             isMinifyEnabled   = true
             isShrinkResources = true
-            signingConfig     = signingConfigs.getByName("release")
+            // FIX: Only apply the signing config if a keystore is actually present
+            signingConfig     = if (hasSigning) signingConfigs.getByName("release") else null
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -115,8 +117,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging.interceptor)
 
-    // Serialization
-    implementation(libs.kotlinx.serialization.json)
+    // Serialization removed (not used)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
@@ -141,5 +142,4 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
-
 }

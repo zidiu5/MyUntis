@@ -37,33 +37,40 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import javax.inject.Inject
+import com.myuntis.app.data.repository.MensaRepository
 
 data class DashboardUiState(
     val fullName: String  = "",
     val className: String = "",
-    val greeting: String  = ""
+    val greeting: String  = "",
+    val mensaAvailable: Boolean = false,
+    val boardAvailable: Boolean = false
 )
 
 @HiltViewModel
 class DashboardViewModel @Inject constructor(
-    private val dataStore: DataStoreManager
+    dataStore: DataStoreManager,
+    mensaRepository: MensaRepository
 ) : ViewModel() {
 
-    val uiState: StateFlow<DashboardUiState> = dataStore.userProfile
-        .map { profile ->
-            val hour = LocalTime.now().hour
-            val greeting = when {
-                hour in 0..11  -> "Guten Morgen"
-                hour in 12..17 -> "Guten Nachmittag"
-                else           -> "Guten Abend"
-            }
-            DashboardUiState(
-                fullName  = profile.fullName.ifBlank { profile.className },
-                className = profile.className,
-                greeting  = greeting
-            )
+    val uiState: StateFlow<DashboardUiState> = combine(
+        dataStore.userProfile,
+        mensaRepository.supportedFlow
+    ) { profile, mensa ->
+        val hour = java.time.LocalTime.now().hour
+        val greeting = when {
+            hour in 0..11  -> "Guten Morgen"
+            hour in 12..17 -> "Guten Nachmittag"
+            else           -> "Guten Abend"
         }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, DashboardUiState())
+        DashboardUiState(
+            fullName  = profile.fullName.ifBlank { profile.className },
+            className = profile.className,
+            greeting  = greeting,
+            mensaAvailable = mensa,
+            boardAvailable = profile.personType == 5
+        )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, DashboardUiState())
 }
 
 // Feature card data
@@ -118,6 +125,24 @@ private val featureCards = listOf(
         color    = Color(0xFF37474F),
         route    = "settings"
     )
+)
+
+// Mensa-Karte wird separat gehalten, damit sie dynamisch eingefügt werden kann
+private val mensaCard = FeatureCard(
+    title    = "Mensa",
+    subtitle = "Speiseplan",
+    icon     = Icons.Outlined.Restaurant,
+    color    = Color(0xFF00796B),
+    route    = "mensa"
+)
+
+// Schwarzes-Brett-Karte, nur für Schüler-Konten sichtbar
+private val boardCard = FeatureCard(
+    title    = "Schwarzes Brett",
+    subtitle = "Klasse teilen",
+    icon     = Icons.Outlined.Forum,
+    color    = Color(0xFF6A1B9A),
+    route    = "board"
 )
 
 @Composable
@@ -204,6 +229,15 @@ fun DashboardScreen(
             modifier   = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
         )
 
+        // Dynamische Kartenliste: Mensa und Schwarzes Brett nur einfügen,
+        // wenn verfügbar. Einstellungen bleibt immer als letzte Karte.
+        val cards = buildList {
+            addAll(featureCards.dropLast(1))          // alle außer Einstellungen
+            if (uiState.mensaAvailable) add(mensaCard)
+            if (uiState.boardAvailable) add(boardCard)
+            add(featureCards.last())                  // Einstellungen bleibt last
+        }
+
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             modifier = Modifier
@@ -213,7 +247,7 @@ fun DashboardScreen(
             verticalArrangement   = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 24.dp)
         ) {
-            items(featureCards) { card ->
+            items(cards) { card ->
                 FeatureCardItem(card = card, onClick = { onNavigate(card.route) })
             }
         }

@@ -6,6 +6,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -119,8 +120,7 @@ fun TimetableScreen(viewModel: TimetableViewModel = hiltViewModel()) {
         }
 
         // ── Main content ────────────────────────────────────
-        // ── Main content ────────────────────────────────────────────
-// swipeDelta accumulates horizontal drag; threshold 80dp triggers nav
+        // swipeDelta accumulates horizontal drag; threshold 80dp triggers nav
         var swipeDelta by remember { mutableFloatStateOf(0f) }
 
         Box(
@@ -586,7 +586,8 @@ private fun DayView(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(lessons, key = { it.id }) { lesson ->
+        // FIX: Use itemsIndexed with a composite key so multiple lessons with the same ID don't crash
+        itemsIndexed(lessons, key = { i, l -> "${l.id}_${l.startTime}_$i" }) { _, lesson ->
             LessonDetailCard(lesson, customColors)
         }
     }

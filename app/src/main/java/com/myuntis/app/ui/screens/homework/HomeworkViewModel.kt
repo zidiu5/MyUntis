@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.network.NetworkResult
 import com.myuntis.app.data.repository.HomeworkRepository
+import com.myuntis.app.data.repository.SessionManager
 import com.myuntis.app.domain.model.Homework
 import com.myuntis.app.domain.model.isDueToday
 import com.myuntis.app.domain.model.isDueTomorrow
@@ -59,16 +60,21 @@ data class HomeworkUiState(
 
 @HiltViewModel
 class HomeworkViewModel @Inject constructor(
-    private val repository: HomeworkRepository
+    private val repository: HomeworkRepository,
+    private val sessionManager: SessionManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeworkUiState())
     val uiState: StateFlow<HomeworkUiState> = _uiState.asStateFlow()
 
-    init { loadHomework() }
+    init {
+        loadHomework()
+        viewModelScope.launch { sessionManager.sessionRenewed.collect { loadHomework() } }
+    }
 
     fun loadHomework() {
         viewModelScope.launch {
+            sessionManager.ensureFresh()
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             when (val result = repository.getHomework()) {
                 is NetworkResult.Success -> _uiState.update {

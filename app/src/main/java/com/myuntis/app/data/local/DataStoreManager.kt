@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import com.myuntis.app.domain.model.SavedAccount
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -12,39 +15,24 @@ import kotlinx.coroutines.flow.map
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
+import com.myuntis.app.data.network.model.BoardCache
+import com.myuntis.app.data.network.model.BoardSession
 
 // =============================================================
 // DATASTORE MANAGER
-// =============================================================
-// DataStore is Android's modern replacement for SharedPreferences.
-// Key differences:
-// - Asynchronous: uses Kotlin Flow (never blocks the main thread)
-// - Type-safe: keys have explicit types
-// - Crash-safe: atomic reads/writes, no partial updates
-//
-// @Singleton: only one instance exists in the whole app (Hilt)
-// @ApplicationContext: we need a context but NOT an Activity context
-//   (Activity can be destroyed; Application lives as long as the app)
 // =============================================================
 @Singleton
 class DataStoreManager @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
 
-    // ----- DATASTORE INSTANCE -----
-    // The 'by preferencesDataStore' delegate creates a DataStore
-    // instance that is tied to this Context.
-    // "myuntis_prefs" is the file name on disk.
     private val dataStore: DataStore<Preferences> = context.dataStore
 
-    // ----- PREFERENCE KEYS -----
-    // Keys are typed - a stringPreferencesKey can only store Strings.
-    // This prevents type mismatches at compile time.
     companion object {
         val KEY_USERNAME = stringPreferencesKey("username")
         val KEY_PASSWORD = stringPreferencesKey("password")
         val KEY_SCHOOL = stringPreferencesKey("school")
-        val KEY_SERVER = stringPreferencesKey("server")             // e.g., "herakles.webuntis.com"
+        val KEY_SERVER = stringPreferencesKey("server")
         val KEY_SESSION_ID = stringPreferencesKey("session_id")
         val KEY_PERSON_ID = intPreferencesKey("person_id")
         val KEY_PERSON_TYPE = intPreferencesKey("person_type")
@@ -60,19 +48,23 @@ class DataStoreManager @Inject constructor(
         val KEY_SCHOOLYEAR_ID = intPreferencesKey("schoolyear_id")
         val KEY_SUBJECT_COLORS = stringPreferencesKey("subject_colors_v2")
         val KEY_KNOWN_SUBJECTS = stringPreferencesKey("known_subjects")
+        val KEY_SUBJECTS_YEAR = intPreferencesKey("known_subjects_year")
 
         val KEY_TIMETABLE_CACHE = stringPreferencesKey("timetable_cache_v2")
+
+        val KEY_ACCOUNTS       = stringPreferencesKey("accounts_v1")
+        val KEY_ACTIVE_ACCOUNT = stringPreferencesKey("active_account_id")
+        val KEY_LOGIN_INTENT   = stringPreferencesKey("login_intent")
+
+        val KEY_MENSA_CACHE  = stringPreferencesKey("mensa_cache_v1")
+        val KEY_MENSA_VEG    = booleanPreferencesKey("mensa_vegetarian")
+        val KEY_BOARD_SESSIONS = stringPreferencesKey("board_sessions_v1")
     }
 
     // ----- READ OPERATIONS (Flow) -----
-    // Flow automatically emits a new value whenever the data changes.
-    // The UI (via ViewModel) collects these flows and updates automatically.
 
-    // Observe all login credentials at once
     val loginCredentials: Flow<LoginCredentials> = dataStore.data
         .catch { exception ->
-            // If DataStore throws IOException, emit empty preferences
-            // (avoids crashing the app if the file is corrupted)
             if (exception is IOException) emit(emptyPreferences())
             else throw exception
         }
@@ -112,6 +104,7 @@ class DataStoreManager @Inject constructor(
     val isAutoSync: Flow<Boolean> = dataStore.data
         .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
         .map { preferences -> preferences[KEY_AUTO_SYNC] ?: true }
+
     val bearerToken: Flow<String?> = dataStore.data
         .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
         .map { it[KEY_BEARER_TOKEN] }
@@ -137,6 +130,11 @@ class DataStoreManager @Inject constructor(
             (prefs[KEY_KNOWN_SUBJECTS] ?: "").split(",").filter { it.isNotBlank() }
         }
 
+    // ── Mensa ─────────────────────────────────────────────────
+    val mensaVegetarian: Flow<Boolean> = dataStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[KEY_MENSA_VEG] ?: false }
+
     suspend fun setSubjectColor(subjectShort: String, hexColor: String) {
         dataStore.edit { prefs ->
             val raw = prefs[KEY_SUBJECT_COLORS] ?: ""
@@ -148,19 +146,23 @@ class DataStoreManager @Inject constructor(
         }
     }
 
-    suspend fun addKnownSubjects(subjects: List<String>) {
+    suspend fun addKnownSubjectsForYear(schoolYear: Int, subjects: List<String>) {
         dataStore.edit { prefs ->
-            val current = (prefs[KEY_KNOWN_SUBJECTS] ?: "")
-                .split(",").filter { it.isNotBlank() }.toMutableSet()
+            val sameYear = prefs[KEY_SUBJECTS_YEAR] == schoolYear
+            val current = if (sameYear)
+                (prefs[KEY_KNOWN_SUBJECTS] ?: "")
+                    .split(",").filter { it.isNotBlank() }.toMutableSet()
+            else
+                mutableSetOf()
+
             current.addAll(subjects)
             prefs[KEY_KNOWN_SUBJECTS] = current.joinToString(",")
+            prefs[KEY_SUBJECTS_YEAR]  = schoolYear
         }
     }
 
-    // ----- WRITE OPERATIONS (suspend functions) -----
-    // 'suspend' means these run on a coroutine (not the main thread)
+    // ----- WRITE OPERATIONS -----
 
-    // Save login credentials after successful login
     suspend fun saveLoginCredentials(
         username: String,
         password: String,
@@ -168,19 +170,17 @@ class DataStoreManager @Inject constructor(
         server: String
     ) {
         dataStore.edit { preferences ->
-            // 'edit' provides a MutablePreferences block
-            // All changes here are written atomically (all or nothing)
             preferences[KEY_USERNAME] = username
             preferences[KEY_PASSWORD] = password
             preferences[KEY_SCHOOL] = school
             preferences[KEY_SERVER] = server
         }
     }
+
     suspend fun saveBearerToken(token: String) {
         dataStore.edit { it[KEY_BEARER_TOKEN] = token }
     }
 
-    // Save session data after successful authentication
     suspend fun saveSession(
         sessionId: String,
         personId: Int,
@@ -200,7 +200,6 @@ class DataStoreManager @Inject constructor(
         }
     }
 
-    // Clear all session data (but keep credentials for re-login)
     suspend fun clearSession() {
         dataStore.edit { preferences ->
             preferences.remove(KEY_SESSION_ID)
@@ -208,14 +207,12 @@ class DataStoreManager @Inject constructor(
         }
     }
 
-    // Complete logout: clear everything
     suspend fun clearAllData() {
         dataStore.edit { preferences ->
-            preferences.clear()     // Removes ALL stored preferences
+            preferences.clear()
         }
     }
 
-    // Save settings
     suspend fun setDarkMode(enabled: Boolean) {
         dataStore.edit { it[KEY_DARK_MODE] = enabled }
     }
@@ -227,7 +224,7 @@ class DataStoreManager @Inject constructor(
     suspend fun updateLastSync() {
         dataStore.edit { it[KEY_LAST_SYNC] = System.currentTimeMillis() }
     }
-    // Returns a set of homework IDs the user has marked as done
+
     suspend fun getCompletedHomeworkIds(): Set<Int> {
         val raw = dataStore.data.first()[KEY_COMPLETED_HOMEWORK] ?: ""
         return raw.split(",")
@@ -247,10 +244,11 @@ class DataStoreManager @Inject constructor(
             prefs[KEY_COMPLETED_HOMEWORK] = current.joinToString(",")
         }
     }
+
     suspend fun saveSchoolYearId(id: Int) {
         dataStore.edit { it[KEY_SCHOOLYEAR_ID] = id }
     }
-    // ── Timetable raw JSON cache ──────────────────────────────
+
     suspend fun saveTimetableCacheRaw(json: String) {
         dataStore.edit { it[KEY_TIMETABLE_CACHE] = json }
     }
@@ -260,14 +258,116 @@ class DataStoreManager @Inject constructor(
             dataStore.data.first()[KEY_TIMETABLE_CACHE]
         } catch (_: Exception) { null }
     }
+
+    // ── Multiple accounts ─────────────────────────────────────────
+    private fun parseAccounts(raw: String?): List<SavedAccount> = try {
+        if (raw.isNullOrBlank()) emptyList()
+        else Gson().fromJson<List<SavedAccount>>(
+            raw, object : TypeToken<List<SavedAccount>>() {}.type
+        ) ?: emptyList()
+    } catch (_: Exception) { emptyList() }
+
+    val accounts: Flow<List<SavedAccount>> = dataStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { parseAccounts(it[KEY_ACCOUNTS]) }
+
+    val activeAccountId: Flow<String?> = dataStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[KEY_ACTIVE_ACCOUNT] }
+
+    suspend fun isAccountsInitialized(): Boolean =
+        dataStore.data.first()[KEY_ACCOUNTS] != null
+
+    suspend fun upsertAccount(account: SavedAccount) {
+        dataStore.edit { prefs ->
+            val list = parseAccounts(prefs[KEY_ACCOUNTS]).toMutableList()
+            val i = list.indexOfFirst { it.id == account.id }
+            if (i >= 0) list[i] = account else list.add(account)
+            prefs[KEY_ACCOUNTS]       = Gson().toJson(list)
+            prefs[KEY_ACTIVE_ACCOUNT] = account.id
+        }
+    }
+
+    suspend fun removeAccount(id: String) {
+        dataStore.edit { prefs ->
+            val list = parseAccounts(prefs[KEY_ACCOUNTS]).filterNot { it.id == id }
+            prefs[KEY_ACCOUNTS] = Gson().toJson(list)
+        }
+    }
+
+    suspend fun setLoginIntent(intent: String) {
+        dataStore.edit { it[KEY_LOGIN_INTENT] = intent }
+    }
+
+    suspend fun consumeLoginIntent(): String {
+        var value = ""
+        dataStore.edit { prefs ->
+            value = prefs[KEY_LOGIN_INTENT] ?: ""
+            prefs.remove(KEY_LOGIN_INTENT)
+        }
+        return value
+    }
+
+    suspend fun clearUserData() {
+        dataStore.edit { prefs ->
+            prefs[KEY_TIMETABLE_CACHE] = "[]"
+            prefs.remove(KEY_KNOWN_SUBJECTS)
+            prefs.remove(KEY_SUBJECTS_YEAR)
+        }
+    }
+
+    // ── Mensa ─────────────────────────────────────────────────
+    suspend fun setMensaVegetarian(value: Boolean) { dataStore.edit { it[KEY_MENSA_VEG] = value } }
+    suspend fun saveMensaCache(json: String)       { dataStore.edit { it[KEY_MENSA_CACHE] = json } }
+
+    suspend fun loadMensaCache(): String? =
+        try { dataStore.data.first()[KEY_MENSA_CACHE] } catch (_: Exception) { null }
+
+    // ── Schwarzes Brett ───────────────────────────────────────────
+    private fun parseBoardSessions(raw: String?): Map<String, BoardSession> = try {
+        if (raw.isNullOrBlank()) emptyMap()
+        else Gson().fromJson<Map<String, BoardSession>>(
+            raw, object : TypeToken<Map<String, BoardSession>>() {}.type
+        ) ?: emptyMap()
+    } catch (_: Exception) { emptyMap() }
+
+    suspend fun loadBoardSessions(): Map<String, BoardSession> =
+        parseBoardSessions(dataStore.data.first()[KEY_BOARD_SESSIONS])
+
+    suspend fun saveBoardSession(accountId: String, session: BoardSession) {
+        dataStore.edit { prefs ->
+            val map = parseBoardSessions(prefs[KEY_BOARD_SESSIONS]).toMutableMap()
+            map[accountId] = session
+            prefs[KEY_BOARD_SESSIONS] = Gson().toJson(map)
+        }
+    }
+
+    suspend fun loadBoardCache(accountId: String): BoardCache? = try {
+        dataStore.data.first()[stringPreferencesKey("board_cache_$accountId")]
+            ?.let { Gson().fromJson(it, BoardCache::class.java) }
+    } catch (_: Exception) { null }
+
+    suspend fun saveBoardCache(accountId: String, cache: BoardCache) {
+        dataStore.edit { it[stringPreferencesKey("board_cache_$accountId")] = Gson().toJson(cache) }
+    }
+
+    // "done" ticks, only on this phone, per account
+    fun boardDoneIds(accountId: String): Flow<Set<String>> = dataStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[stringSetPreferencesKey("board_done_$accountId")] ?: emptySet() }
+
+    suspend fun setBoardDone(accountId: String, postId: String, done: Boolean) {
+        dataStore.edit { prefs ->
+            val key = stringSetPreferencesKey("board_done_$accountId")
+            val set = (prefs[key] ?: emptySet()).toMutableSet()
+            if (done) set.add(postId) else set.remove(postId)
+            prefs[key] = set
+        }
+    }
 }
 
-// Extension property to create/access the DataStore
-// Created once per app process, tied to the application context
 private val Context.dataStore: DataStore<Preferences>
         by preferencesDataStore(name = "myuntis_prefs")
-
-// ----- DATA CLASSES for grouped preferences -----
 
 data class LoginCredentials(
     val username: String,

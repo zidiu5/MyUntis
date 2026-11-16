@@ -4,7 +4,9 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -19,7 +21,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -37,21 +41,28 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 // =============================================================
-// GRADE COLOR  –  updated mapping
-// 1‑5 → red, 6 → orange, 7 → yellow, 8 → green, 9 → stronger green, 10 → cyan
+// GRADE COLOR  –  readable in both light and dark mode
+// 1‑5 → red, 6 → orange, 7 → yellow/gold, 8 → green, 9 → strong green, 10 → cyan
 // =============================================================
+@Composable
+private fun isDarkTheme(): Boolean = MaterialTheme.colorScheme.background.luminance() < 0.5f
+
+@Composable
 private fun gradeColor(v: Float): Color {
-    val rounded = v.roundToInt().coerceIn(1, 10)
-    return when (rounded) {
-        in 1..5 -> Color(0xFFFF4444)   // red
-        6       -> Color(0xFFFF8800)   // orange
-        7       -> Color(0xFFFFCC00)   // yellow
-        8       -> Color(0xFF00FF88)   // green
-        9       -> Color(0xFF44FF88)   // stronger green
-        10      -> Color(0xFF00D4FF)   // cyan / blue
-        else    -> Color(0xFFFF4444)   // fallback red
+    val dark = isDarkTheme()
+    return when (val r = v.roundToInt()) {
+        in Int.MIN_VALUE..5 -> if (dark) Color(0xFFFF4444) else Color(0xFFD32F2F) // red
+        6                   -> if (dark) Color(0xFFFF8800) else Color(0xFFE65100) // orange
+        7                   -> if (dark) Color(0xFFFFCC00) else Color(0xFFB88600) // yellow → dark gold
+        8                   -> if (dark) Color(0xFF00FF88) else Color(0xFF2E9E4F) // green
+        9                   -> if (dark) Color(0xFF44FF88) else Color(0xFF1B7F3B) // strong green
+        else                -> if (dark) Color(0xFF00D4FF) else Color(0xFF0088A3) // cyan (10)
     }
 }
+
+// One colour per grade 4..10, same source as gradeColor()
+@Composable
+private fun gradeBucketColors(): List<Color> = (4..10).map { gradeColor(it.toFloat()) }
 
 // =============================================================
 // MAIN SCREEN
@@ -99,8 +110,39 @@ fun GradesScreen(viewModel: GradesViewModel = hiltViewModel()) {
         }
 
         when (uiState.activeTab) {
-            GradesTab.GRADES   -> GradesContent(uiState, viewModel)
+            GradesTab.GRADES   -> {
+                YearSelector(uiState, viewModel::selectYear)
+                GradesContent(uiState, viewModel)
+            }
             GradesTab.ABSENCES -> AbsencesContent(uiState)
+        }
+    }
+}
+
+// =============================================================
+// YEAR SELECTOR  –  chips for current and past school years
+// =============================================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun YearSelector(uiState: GradesUiState, onSelect: (Int?) -> Unit) {
+    if (uiState.schoolYears.size < 2) return   // only one year → nothing to switch
+
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        itemsIndexed(uiState.schoolYears) { index, year ->
+            val isCurrent = index == 0
+            val selected = if (isCurrent)
+                uiState.selectedYearId == null || uiState.selectedYearId == year.id
+            else
+                uiState.selectedYearId == year.id
+
+            FilterChip(
+                selected = selected,
+                onClick  = { onSelect(if (isCurrent) null else year.id) },
+                label    = { Text(year.name) }
+            )
         }
     }
 }
@@ -431,16 +473,8 @@ private fun AnalyseTab(uiState: GradesUiState) {
     val counts = uiState.gradeCounts
     val total  = counts.sumOf { it.second }
 
-    // Updated colour mapping for grades 1..10
-    val bucketColors = listOf(
-        Color(0xFFFF4444),  // 4
-        Color(0xFFFF6644),  // 5
-        Color(0xFFFF8800),  // 6
-        Color(0xFFFFCC00),  // 7
-        Color(0xFF00FF88),  // 8
-        Color(0xFF44FF88),  // 9
-        Color(0xFF00D4FF)   // 10
-    )
+    // Updated colour mapping for grades 4..10
+    val bucketColors = gradeBucketColors()
 
     Column(
         modifier = Modifier
@@ -600,21 +634,14 @@ private fun AnalyseTab(uiState: GradesUiState) {
 // =============================================================
 @Composable
 private fun DonutChart(counts: List<Pair<String, Int>>, total: Int) {
-    // Updated colour mapping for grades 1..10 (same as in AnalyseTab)
-    val bucketColors = listOf(
-        Color(0xFFFF4444),  // 4  → red
-        Color(0xFFFF6644),  // 5  → red-orange
-        Color(0xFFFF8800),  // 6  → orange
-        Color(0xFFFFCC00),  // 7  → yellow
-        Color(0xFF00FF88),  // 8  → green
-        Color(0xFF44FF88),  // 9  → strong green
-        Color(0xFF00D4FF)   // 10 → cyan
-    )
+    // Colour mapping for grades 4..10 (same source as gradeColor)
+    val bucketColors = gradeBucketColors()
 
-    val avgText = counts
+    val avgValue = counts
         .filter { it.second > 0 }
         .sumOf { (label, cnt) -> (label.toIntOrNull() ?: 0) * cnt }
-        .let { if (total > 0) "%.1f".format(it.toFloat() / total) else "" }
+        .let { if (total > 0) it.toFloat() / total else 0f }
+    val avgText = if (total > 0) "%.1f".format(avgValue) else ""
 
     Box(
         modifier = Modifier.size(180.dp),
@@ -657,7 +684,7 @@ private fun DonutChart(counts: List<Pair<String, Int>>, total: Int) {
                 avgText,
                 style      = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Black,
-                color      = gradeColor(avgText.toFloatOrNull() ?: 0f)
+                color      = gradeColor(avgValue)
             )
             Text(
                 "$total Noten",
@@ -740,13 +767,14 @@ private fun AbsenceCard(absence: Absence) {
     val statusColor = if (absence.isExcused) Color(0xFF2E7D32) else MaterialTheme.colorScheme.error
     val hasDetail   = absence.detail.isNotBlank() || absence.reason.isNotBlank()
 
+    val surface = MaterialTheme.colorScheme.surface
+    val cardColor = if (absence.isExcused) surface
+    else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f).compositeOver(surface)
+
     Card(
         modifier  = Modifier.fillMaxWidth().clickable(enabled = hasDetail) { expanded = !expanded },
         shape     = RoundedCornerShape(14.dp),
-        colors    = CardDefaults.cardColors(
-            containerColor = if (absence.isExcused) MaterialTheme.colorScheme.surface
-            else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.25f)
-        ),
+        colors    = CardDefaults.cardColors(containerColor = cardColor),
         elevation = CardDefaults.cardElevation(1.dp)
     ) {
         Column {

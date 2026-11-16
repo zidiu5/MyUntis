@@ -1,13 +1,21 @@
 package com.myuntis.app.ui.screens.main
 
+import android.content.Context
+import android.content.ContextWrapper
+import androidx.activity.ComponentActivity
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -28,6 +36,23 @@ fun MainScreen(
     onLogout: () -> Unit,
     onNavigate: (String) -> Unit = {}
 ) {
+    val mainViewModel: MainViewModel = hiltViewModel()
+    val context = LocalContext.current
+
+    // App comes back from background → renew session if it is older than 5 min
+    DisposableEffect(context) {
+        val activity = context.findComponentActivity()
+        if (activity == null) {
+            onDispose { }
+        } else {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_START) mainViewModel.onAppResumed()
+            }
+            activity.lifecycle.addObserver(observer)
+            onDispose { activity.lifecycle.removeObserver(observer) }
+        }
+    }
+
     val innerNavController = rememberNavController()
     val navBackStackEntry  by innerNavController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
@@ -105,4 +130,10 @@ fun MainScreen(
             }
         }
     }
+}
+
+private tailrec fun Context.findComponentActivity(): ComponentActivity? = when (this) {
+    is ComponentActivity -> this
+    is ContextWrapper    -> baseContext.findComponentActivity()
+    else                 -> null
 }

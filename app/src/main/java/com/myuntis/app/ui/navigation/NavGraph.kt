@@ -13,6 +13,8 @@ import com.myuntis.app.ui.screens.login.LoginScreen
 import com.myuntis.app.ui.screens.main.MainScreen
 import com.myuntis.app.ui.screens.classreg.ClassRegScreen
 import com.myuntis.app.ui.screens.exams.ExamsScreen
+import com.myuntis.app.ui.screens.mensa.MensaScreen
+import com.myuntis.app.ui.screens.board.BoardScreen
 
 // =============================================================
 // APP NAV GRAPH
@@ -73,7 +75,6 @@ fun AppNavGraph() {
         }
 
         // ---- MAIN (with bottom navigation) ----
-        // ---- MAIN (with bottom navigation) ----
         composable(Screen.Main.route) {
             MainScreen(
                 onLogout = {
@@ -93,6 +94,12 @@ fun AppNavGraph() {
         }
         composable(Screen.Exams.route) {
             ExamsScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Screen.Mensa.route) {
+            MensaScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Screen.Board.route) {
+            BoardScreen(onBack = { navController.popBackStack() })
         }
     }
 }

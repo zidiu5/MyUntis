@@ -152,15 +152,27 @@ class TimetableRepository @Inject constructor(
         // Persist to DataStore (merged, pruned to ±6 weeks)
         saveToCache(lessons)
 
-        // Save known subject short names for Settings
-        if (lessons.isNotEmpty()) {
-            val realSubjects = lessons
+        // Only subjects from the CURRENT school year go into the settings list.
+        // (Scrolling back into last year must not add old subjects.)
+        val today     = LocalDate.now()
+        val yearStart = if (today.monthValue >= 9)
+            LocalDate.of(today.year, 9, 1)
+        else
+            LocalDate.of(today.year - 1, 9, 1)
+        val yearEnd = yearStart.plusYears(1).minusDays(1)
+
+        val currentYearLessons = lessons.filter { it.date in yearStart..yearEnd }
+
+        if (currentYearLessons.isNotEmpty()) {
+            val realSubjects = currentYearLessons
                 .map { it.subject.shortName }
                 .filter { it.isNotBlank() && it != "-" && it != "EVT" }
                 .distinct()
-            val hasEvents = lessons.any { it.subject.shortName == "EVT" }
-            dataStore.addKnownSubjects(
-                if (hasEvents) realSubjects + "EVT" else realSubjects
+            val hasEvents = currentYearLessons.any { it.subject.shortName == "EVT" }
+
+            dataStore.addKnownSubjectsForYear(
+                schoolYear = yearStart.year,
+                subjects   = if (hasEvents) realSubjects + "EVT" else realSubjects
             )
         }
 

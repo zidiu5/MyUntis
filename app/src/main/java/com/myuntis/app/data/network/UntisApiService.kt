@@ -10,6 +10,10 @@ import com.google.gson.JsonObject
 import okhttp3.RequestBody
 import retrofit2.http.PATCH
 import retrofit2.http.DELETE
+import okhttp3.MultipartBody
+import retrofit2.http.Multipart
+import retrofit2.http.Part
+import retrofit2.http.Streaming
 
 // =============================================================
 // UNTIS API SERVICE
@@ -279,4 +283,37 @@ interface UntisApiService {
         @Url url: String,
         @Header("X-API-Key") apiKey: String
     ): Response<JsonObject>
+
+    @Multipart
+    @POST
+    suspend fun boardUpload(
+        @Url url: String,
+        @Header("Authorization") authorization: String,
+        @Part file: MultipartBody.Part
+    ): Response<BoardUploadResponse>
+
+    @Streaming
+    @GET
+    suspend fun boardDownload(
+        @Url url: String,
+        @Header("Authorization") authorization: String
+    ): Response<ResponseBody>
+
+    @POST
+    suspend fun boardVote(
+        @Url url: String,
+        @Header("Authorization") authorization: String
+    ): Response<VoteResult>
+
+    @DELETE
+    suspend fun boardUnvote(
+        @Url url: String,
+        @Header("Authorization") authorization: String
+    ): Response<VoteResult>
+
+    @GET
+    suspend fun boardStorage(
+        @Url url: String,
+        @Header("Authorization") authorization: String
+    ): Response<StorageResponse>
 }

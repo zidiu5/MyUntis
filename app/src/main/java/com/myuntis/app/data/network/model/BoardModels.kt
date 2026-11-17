@@ -80,3 +80,25 @@ data class BoardCache(
     val posts: List<BoardPost> = emptyList(),
     val stats: BoardStats? = null
 )
+
+data class BoardUploadResponse(
+    val fileId: String = "", val name: String = "", val mime: String = "", val size: Long = 0
+)
+
+data class VoteResult(val count: Int = 0, val needed: Int = 0, val deleted: Boolean = false)
+
+data class StorageItem(
+    val postId: String = "",
+    val title: String? = null,
+    val subject: String? = null,
+    val size: Long = 0,
+    val createdAt: String = "",
+    val author: BoardAuthor? = null,
+    val deleteVotes: DeleteVotes? = null
+)
+
+data class StorageResponse(
+    val usedBytes: Long = 0,
+    val quotaBytes: Long = 0,
+    val items: List<StorageItem> = emptyList()
+)

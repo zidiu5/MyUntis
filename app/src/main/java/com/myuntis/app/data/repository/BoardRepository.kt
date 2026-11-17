@@ -28,14 +28,26 @@ import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 
+import android.net.Uri
+import com.google.gson.JsonArray
+import com.myuntis.app.data.network.model.BoardAttachment
+import com.myuntis.app.data.network.model.BoardUploadResponse
+import com.myuntis.app.data.network.model.StorageResponse
+import com.myuntis.app.data.network.model.VoteResult
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.MultipartBody
+import java.io.File
+
 /** What the user typed in the editor. */
 data class PostDraft(
     val type: String,
     val subject: String,
     val title: String,
     val body: String,
-    val dueDate: String?,        // YYYY-MM-DD or null
-    val openEdit: Boolean
+    val dueDate: String?,
+    val openEdit: Boolean,
+    val attachmentIds: List<String> = emptyList()
 )
 
 data class BoardSnapshot(
@@ -51,7 +63,8 @@ fun NetworkResult<*>.errorMessage(): String? = (this as? NetworkResult.Error)?.m
 class BoardRepository @Inject constructor(
     private val api: UntisApiService,
     private val dataStore: DataStoreManager,
-    private val sessionManager: SessionManager
+    private val sessionManager: SessionManager,
+    private val files: BoardFileHelper
 ) {
     companion object {
         const val BASE = "https://board.zidiu1.com/api/v1"
@@ -151,6 +164,9 @@ class BoardRepository @Inject constructor(
             d.body.trim().takeIf { it.isNotEmpty() }?.let { addProperty("body", it) }
             d.dueDate?.let { addProperty("dueDate", it) }
             addProperty("openEdit", d.openEdit)
+            if (d.attachmentIds.isNotEmpty()) {
+                add("attachmentIds", JsonArray().apply { d.attachmentIds.forEach { add(it) } })
+            }
         }
         return authed { s ->
             api.boardCreatePost(boardUrl(s, "posts"), "Bearer ${s.token}",
@@ -184,6 +200,11 @@ class BoardRepository @Inject constructor(
 
         if (isAuthor && d.openEdit != original.openEdit) json.addProperty("openEdit", d.openEdit)
 
+        val oldIds = original.attachments.map { it.id }
+        if (d.attachmentIds != oldIds) {
+            json.add("attachmentIds", JsonArray().apply { d.attachmentIds.forEach { add(it) } })
+        }
+
         if (json.entrySet().isEmpty()) return NetworkResult.Success(original)
 
         return authed { s ->
@@ -197,6 +218,63 @@ class BoardRepository @Inject constructor(
 
     suspend fun reportPost(postId: String): NetworkResult<Unit> =
         authedUnit { s -> api.boardReportPost(boardUrl(s, "posts/$postId/report"), "Bearer ${s.token}") }
+
+
+    // ── Files ─────────────────────────────────────────────────
+    suspend fun uploadFile(uri: Uri): NetworkResult<BoardUploadResponse> {
+        val prepared = try {
+            withContext(Dispatchers.IO) { files.prepare(uri) }
+        } catch (e: IllegalArgumentException) {
+            return NetworkResult.Error(e.message ?: "Die Datei kann nicht verwendet werden.")
+        } catch (e: Exception) {
+            return NetworkResult.Error("Die Datei konnte nicht gelesen werden.")
+        }
+        val part = MultipartBody.Part.createFormData(
+            "file", prepared.name, prepared.bytes.toRequestBody(prepared.mime.toMediaType())
+        )
+        return authed { s -> api.boardUpload(boardUrl(s, "files"), "Bearer ${s.token}", part) }
+    }
+
+    suspend fun downloadAttachment(att: BoardAttachment): NetworkResult<File> {
+        val file = files.cacheFile(att.id, att.name)
+        if (file.exists() && file.length() > 0 && (att.size <= 0 || file.length() == att.size)) {
+            return NetworkResult.Success(file)
+        }
+        val resp = when (val r = authedCall { s ->
+            api.boardDownload("$BASE/files/${att.id}", "Bearer ${s.token}")
+        }) {
+            is NetworkResult.Success -> r.data
+            is NetworkResult.Error   -> return NetworkResult.Error(r.message)
+            else                     -> return NetworkResult.Error("Download fehlgeschlagen.")
+        }
+        val body = resp.body() ?: return NetworkResult.Error("Leere Antwort vom Server.")
+        return try {
+            withContext(Dispatchers.IO) {
+                file.delete()
+                val tmp = File(file.parentFile, file.name + ".part")
+                body.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
+                if (!tmp.renameTo(file)) throw java.io.IOException("Datei konnte nicht gespeichert werden.")
+            }
+            NetworkResult.Success(file)
+        } catch (e: Exception) {
+            NetworkResult.Error(e.localizedMessage ?: "Download fehlgeschlagen.")
+        }
+    }
+
+    /** null = saved to Downloads, otherwise an error text. */
+    fun saveAttachment(file: File, att: BoardAttachment): String? =
+        files.saveToDownloads(file, att.name, att.mime)
+
+    // ── Voting / storage ──────────────────────────────────────
+    suspend fun vote(postId: String, vote: Boolean): NetworkResult<VoteResult> = authed { s ->
+        val url  = boardUrl(s, "posts/$postId/delete-vote")
+        val auth = "Bearer ${s.token}"
+        if (vote) api.boardVote(url, auth) else api.boardUnvote(url, auth)
+    }
+
+    suspend fun getStorage(): NetworkResult<StorageResponse> = authed { s ->
+        api.boardStorage(boardUrl(s, "storage"), "Bearer ${s.token}")
+    }
 
     // ── Nickname ──────────────────────────────────────────────
     suspend fun updateNickname(nickname: String): NetworkResult<Unit> {
@@ -374,7 +452,12 @@ class BoardRepository @Inject constructor(
         "own_post"           -> "Das geht bei eigenen Beiträgen nicht."
         "bad_nickname"       -> "Dieser Name ist nicht erlaubt (2–24 Zeichen)."
         "bad_request"        -> "Ungültige Eingabe."
-        "too_large"          -> "Der Beitrag ist zu groß."
+        "too_large"            -> "Die Datei ist zu groß (max. 10 MB)."
+        "unsupported_type"     -> "Dieser Dateityp ist nicht erlaubt."
+        "board_quota_exceeded" -> "Der Speicher deiner Klasse ist voll. Räum unter „Speicher aufräumen“ auf."
+        "server_full"          -> "Der Server ist voll. Bitte später nochmal versuchen."
+        "invalid_attachment"   -> "Ein Anhang ist ungültig. Bitte neu hochladen."
+        "hidden"               -> "Dieser Beitrag ist ausgeblendet."
         "not_found"          -> "Beitrag nicht gefunden."
         else                 -> "Fehler beim Schwarzen Brett (HTTP $http)."
     }

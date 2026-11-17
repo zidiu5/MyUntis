@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.local.DataStoreManager
 import com.myuntis.app.data.network.NetworkResult
+import com.myuntis.app.data.repository.CacheKeys
+import com.myuntis.app.data.repository.DataCache
 import com.myuntis.app.data.repository.SessionManager
 import com.myuntis.app.data.repository.TimetableRepository
 import com.myuntis.app.domain.model.Lesson
@@ -45,7 +47,8 @@ data class TimetableUiState(
 class TimetableViewModel @Inject constructor(
     private val repository: TimetableRepository,
     private val dataStore: DataStoreManager,
-    private val sessionManager: SessionManager
+    private val sessionManager: SessionManager,
+    private val cache: DataCache
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TimetableUiState())
@@ -59,9 +62,16 @@ class TimetableViewModel @Inject constructor(
             }
         }
 
-        // Reload after the session was renewed in the background
+        // The preloader (or this screen) fills the cache → merge it into the UI
         viewModelScope.launch {
-            sessionManager.sessionRenewed.collect { refresh() }
+            cache.flow<List<Lesson>>(CacheKeys.TIMETABLE).collect { lessons ->
+                if (lessons != null) _uiState.update { st ->
+                    st.copy(
+                        isLoading = false, isRefreshing = false, errorMessage = null,
+                        lessonsByDate = st.lessonsByDate + lessons.groupBy { it.date }
+                    )
+                }
+            }
         }
 
         // Strategy:
@@ -91,34 +101,21 @@ class TimetableViewModel @Inject constructor(
      * Shows spinner only when there is no cached data at all.
      * Updates the state silently when data arrives.
      */
-    private fun prefetchInBackground() {
+    private fun prefetchInBackground(force: Boolean = false) {
         viewModelScope.launch {
-            sessionManager.ensureFresh()
-            when (val r = repository.prefetchMultipleWeeks()) {
-                is NetworkResult.Success -> {
-                    val byDate = r.data.groupBy { it.date }
-                    _uiState.update { current ->
-                        current.copy(
-                            isLoading     = false,
-                            isRefreshing  = false,
-                            errorMessage  = null,
-                            // Merge: fresh data overwrites cached days, rest preserved
-                            lessonsByDate = current.lessonsByDate + byDate
-                        )
-                    }
+            val r = cache.load(CacheKeys.TIMETABLE, CacheKeys.TIMETABLE_MAX_AGE_MS, force) {
+                sessionManager.ensureFresh()
+                repository.prefetchMultipleWeeks()
+            }
+            if (r is NetworkResult.Error) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false, isRefreshing = false,
+                        errorMessage = if (it.lessonsByDate.isEmpty()) r.message else null
+                    )
                 }
-                is NetworkResult.Error -> {
-                    _uiState.update { current ->
-                        current.copy(
-                            isLoading    = false,
-                            isRefreshing = false,
-                            // Show error only if we have nothing to show
-                            errorMessage = if (current.lessonsByDate.isEmpty())
-                                r.message else null
-                        )
-                    }
-                }
-                else -> _uiState.update { it.copy(isLoading = false, isRefreshing = false) }
+            } else {
+                _uiState.update { it.copy(isLoading = false, isRefreshing = false) }
             }
         }
     }
@@ -190,7 +187,7 @@ class TimetableViewModel @Inject constructor(
     /** Manual pull-to-refresh: re-prefetch everything and show spinner. */
     fun refresh() {
         _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
-        prefetchInBackground()
+        prefetchInBackground(force = true)
     }
 
     // ── Stale-while-revalidate helpers ────────────────────────

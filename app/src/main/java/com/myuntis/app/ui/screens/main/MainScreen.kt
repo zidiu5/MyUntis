@@ -30,6 +30,10 @@ import com.myuntis.app.ui.screens.homework.HomeworkScreen
 import com.myuntis.app.ui.screens.messages.MessagesScreen
 import com.myuntis.app.ui.screens.settings.SettingsScreen
 import com.myuntis.app.ui.screens.timetable.TimetableScreen
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.unit.sp
 
 @Composable
 fun MainScreen(
@@ -84,6 +88,9 @@ fun MainScreen(
         }
     }
 
+    // One shared size for all labels: shrinks until the longest one fits on one line
+    var navLabelSize by remember { mutableFloatStateOf(12f) }
+
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -101,7 +108,17 @@ fun MainScreen(
                                 contentDescription = item.label
                             )
                         },
-                        label          = { Text(item.label) },
+                        label = {
+                            Text(
+                                text = item.label,
+                                fontSize = navLabelSize.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                                onTextLayout = { r ->
+                                    if (r.didOverflowWidth && navLabelSize > 8f) navLabelSize -= 0.5f
+                                }
+                            )
+                        },
                         alwaysShowLabel = true
                     )
                 }

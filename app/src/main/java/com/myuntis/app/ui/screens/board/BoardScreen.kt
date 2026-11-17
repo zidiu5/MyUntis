@@ -84,8 +84,6 @@ data class BoardUiState(
     val stats: BoardStats?            = null,
     val className: String             = "",
     val schoolName: String            = "",
-    val nickname: String              = "",
-    val askNickname: Boolean          = false,
     val error: String?                = null,
     val filter: String?               = null,
     val doneIds: Set<String>          = emptySet(),
@@ -135,8 +133,6 @@ class BoardViewModel @Inject constructor(
             it.copy(
                 posts = snap.posts, stats = snap.stats,
                 className = snap.session.className, schoolName = snap.session.schoolName,
-                nickname = snap.session.nickname,
-                askNickname = !snap.session.nicknameConfirmed,
                 isLoading = false, isRefreshing = false, error = null
             )
         }
@@ -304,20 +300,6 @@ class BoardViewModel @Inject constructor(
             _ui.update { it.copy(storageLoading = false) }
         }
     }
-
-    // ── Nickname ──────────────────────────────────────────────
-    fun confirmNickname(name: String) {
-        viewModelScope.launch {
-            if (name.trim() == _ui.value.nickname) {
-                repository.confirmNickname()
-                _ui.update { it.copy(askNickname = false) }
-            } else {
-                val err = repository.updateNickname(name).errorMessage()
-                if (err == null) _ui.update { it.copy(askNickname = false, nickname = name.trim()) }
-                else _ui.update { it.copy(message = err) }
-            }
-        }
-    }
 }
 
 // =============================================================
@@ -382,9 +364,6 @@ fun BoardScreen(
         }
     }
 
-    if (ui.askNickname && ui.nickname.isNotBlank()) {
-        NicknameDialog(current = ui.nickname, onConfirm = viewModel::confirmNickname)
-    }
 
     if (showEditor) {
         PostEditorDialog(
@@ -869,28 +848,6 @@ private fun StorageSheet(
 // =============================================================
 // DIALOGS
 // =============================================================
-@Composable
-private fun NicknameDialog(current: String, onConfirm: (String) -> Unit) {
-    var name by remember { mutableStateOf(current) }
-    AlertDialog(
-        onDismissRequest = {},
-        title = { Text("Heißt du so?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("So sehen dich deine Mitschüler im Schwarzen Brett.")
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { if (it.length <= 24) name = it },
-                    singleLine = true,
-                    label = { Text("Name") }
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = { onConfirm(name) }, enabled = name.trim().length >= 2) { Text("Weiter") }
-        }
-    )
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

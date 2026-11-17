@@ -30,7 +30,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.network.NetworkResult
+import com.myuntis.app.data.repository.CacheKeys
 import com.myuntis.app.data.repository.ClassRegRepository
+import com.myuntis.app.data.repository.DataCache
 import com.myuntis.app.data.repository.SessionManager
 import com.myuntis.app.domain.model.ClassRegEntry
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -46,32 +48,43 @@ data class ClassRegUiState(
     val error: String?             = null
 )
 
-
-
 @HiltViewModel
 class ClassRegViewModel @Inject constructor(
     private val repository: ClassRegRepository,
-    private val sessionManager: SessionManager
+    private val sessionManager: SessionManager,
+    private val cache: DataCache
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ClassRegUiState())
     val uiState: StateFlow<ClassRegUiState> = _uiState.asStateFlow()
 
     init {
-        load()
-        viewModelScope.launch { sessionManager.sessionRenewed.collect { load() } }
+        cache.get<List<ClassRegEntry>>(CacheKeys.CLASSREG)?.let { list ->
+            _uiState.update { it.copy(isLoading = false, entries = list) }
+        }
+        viewModelScope.launch {
+            cache.flow<List<ClassRegEntry>>(CacheKeys.CLASSREG).collect { list ->
+                if (list != null) _uiState.update { it.copy(isLoading = false, entries = list, error = null) }
+            }
+        }
+        loadInternal(force = false)
     }
 
-    fun load() {
+    fun load() = loadInternal(force = true)
+
+    private fun loadInternal(force: Boolean) {
         viewModelScope.launch {
-            sessionManager.ensureFresh()
-            _uiState.update { it.copy(isLoading = true, error = null) }
-            when (val r = repository.getEntries()) {
-                is NetworkResult.Success ->
-                    _uiState.update { it.copy(isLoading = false, entries = r.data) }
-                is NetworkResult.Error ->
-                    _uiState.update { it.copy(isLoading = false, error = r.message) }
-                else -> _uiState.update { it.copy(isLoading = false) }
+            val hadData = cache.get<List<ClassRegEntry>>(CacheKeys.CLASSREG) != null
+            if (!hadData) _uiState.update { it.copy(isLoading = true, error = null) }
+
+            val r = cache.load(CacheKeys.CLASSREG, CacheKeys.MAX_AGE_MS, force) {
+                sessionManager.ensureFresh()
+                repository.getEntries()
+            }
+            if (r is NetworkResult.Error) {
+                _uiState.update { it.copy(isLoading = false, error = if (hadData) null else r.message) }
+            } else {
+                _uiState.update { it.copy(isLoading = false) }
             }
         }
     }

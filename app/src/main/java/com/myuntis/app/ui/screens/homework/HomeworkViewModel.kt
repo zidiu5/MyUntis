@@ -3,6 +3,8 @@ package com.myuntis.app.ui.screens.homework
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.network.NetworkResult
+import com.myuntis.app.data.repository.CacheKeys
+import com.myuntis.app.data.repository.DataCache
 import com.myuntis.app.data.repository.HomeworkRepository
 import com.myuntis.app.data.repository.SessionManager
 import com.myuntis.app.domain.model.Homework
@@ -61,29 +63,42 @@ data class HomeworkUiState(
 @HiltViewModel
 class HomeworkViewModel @Inject constructor(
     private val repository: HomeworkRepository,
-    private val sessionManager: SessionManager
+    private val sessionManager: SessionManager,
+    private val cache: DataCache
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(HomeworkUiState())
     val uiState: StateFlow<HomeworkUiState> = _uiState.asStateFlow()
 
     init {
-        loadHomework()
-        viewModelScope.launch { sessionManager.sessionRenewed.collect { loadHomework() } }
+        cache.get<List<Homework>>(CacheKeys.HOMEWORK)?.let { list ->
+            _uiState.update { it.copy(isLoading = false, allHomework = list) }
+        }
+        viewModelScope.launch {
+            cache.flow<List<Homework>>(CacheKeys.HOMEWORK).collect { list ->
+                if (list != null) _uiState.update {
+                    it.copy(isLoading = false, allHomework = list, errorMessage = null)
+                }
+            }
+        }
+        loadInternal(force = false)
     }
 
-    fun loadHomework() {
+    fun loadHomework() = loadInternal(force = true)
+
+    private fun loadInternal(force: Boolean) {
         viewModelScope.launch {
-            sessionManager.ensureFresh()
-            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            when (val result = repository.getHomework()) {
-                is NetworkResult.Success -> _uiState.update {
-                    it.copy(isLoading = false, allHomework = result.data)
-                }
-                is NetworkResult.Error -> _uiState.update {
-                    it.copy(isLoading = false, errorMessage = result.message)
-                }
-                else -> _uiState.update { it.copy(isLoading = false) }
+            val hadData = cache.get<List<Homework>>(CacheKeys.HOMEWORK) != null
+            if (!hadData) _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+
+            val r = cache.load(CacheKeys.HOMEWORK, CacheKeys.MAX_AGE_MS, force) {
+                sessionManager.ensureFresh()
+                repository.getHomework()
+            }
+            if (r is NetworkResult.Error) {
+                _uiState.update { it.copy(isLoading = false, errorMessage = if (hadData) null else r.message) }
+            } else {
+                _uiState.update { it.copy(isLoading = false) }
             }
         }
     }
@@ -94,19 +109,10 @@ class HomeworkViewModel @Inject constructor(
 
     fun toggleComplete(homework: Homework) {
         val newState = !homework.isCompleted
-
-        // Optimistic UI update (instant feedback, no waiting for API)
-        _uiState.update { state ->
-            state.copy(
-                allHomework = state.allHomework.map {
-                    if (it.id == homework.id) it.copy(isCompleted = newState) else it
-                }
-            )
+        val updated = _uiState.value.allHomework.map {
+            if (it.id == homework.id) it.copy(isCompleted = newState) else it
         }
-
-        // Persist to local storage
-        viewModelScope.launch {
-            repository.toggleComplete(homework.id, newState)
-        }
+        cache.put(CacheKeys.HOMEWORK, updated)    // the screen follows via the cache flow
+        viewModelScope.launch { repository.toggleComplete(homework.id, newState) }
     }
 }

@@ -25,6 +25,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.network.NetworkResult
+import com.myuntis.app.data.repository.CacheKeys
+import com.myuntis.app.data.repository.DataCache
 import com.myuntis.app.data.repository.ExamRepository
 import com.myuntis.app.data.repository.SessionManager
 import com.myuntis.app.domain.model.Exam
@@ -48,27 +50,40 @@ data class ExamsUiState(
 @HiltViewModel
 class ExamsViewModel @Inject constructor(
     private val repository: ExamRepository,
-    private val sessionManager: SessionManager
+    private val sessionManager: SessionManager,
+    private val cache: DataCache
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ExamsUiState())
     val uiState: StateFlow<ExamsUiState> = _uiState.asStateFlow()
 
     init {
-        load()
-        viewModelScope.launch { sessionManager.sessionRenewed.collect { load() } }
+        cache.get<List<Exam>>(CacheKeys.EXAMS)?.let { list ->
+            _uiState.update { it.copy(isLoading = false, exams = list) }
+        }
+        viewModelScope.launch {
+            cache.flow<List<Exam>>(CacheKeys.EXAMS).collect { list ->
+                if (list != null) _uiState.update { it.copy(isLoading = false, exams = list, error = null) }
+            }
+        }
+        loadInternal(force = false)
     }
 
-    fun load() {
+    fun load() = loadInternal(force = true)      // refresh button / retry
+
+    private fun loadInternal(force: Boolean) {
         viewModelScope.launch {
-            sessionManager.ensureFresh()
-            _uiState.update { it.copy(isLoading = true, error = null) }
-            when (val r = repository.getExams()) {
-                is NetworkResult.Success ->
-                    _uiState.update { it.copy(isLoading = false, exams = r.data) }
-                is NetworkResult.Error ->
-                    _uiState.update { it.copy(isLoading = false, error = r.message) }
-                else -> _uiState.update { it.copy(isLoading = false) }
+            val hadData = cache.get<List<Exam>>(CacheKeys.EXAMS) != null
+            if (!hadData) _uiState.update { it.copy(isLoading = true, error = null) }
+
+            val r = cache.load(CacheKeys.EXAMS, CacheKeys.MAX_AGE_MS, force) {
+                sessionManager.ensureFresh()
+                repository.getExams()
+            }
+            if (r is NetworkResult.Error) {
+                _uiState.update { it.copy(isLoading = false, error = if (hadData) null else r.message) }
+            } else {
+                _uiState.update { it.copy(isLoading = false) }
             }
         }
     }

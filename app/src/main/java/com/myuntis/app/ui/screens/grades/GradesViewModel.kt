@@ -3,13 +3,17 @@ package com.myuntis.app.ui.screens.grades
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.network.NetworkResult
+import com.myuntis.app.data.repository.CacheKeys
+import com.myuntis.app.data.repository.DataCache
 import com.myuntis.app.data.repository.GradesRepository
 import com.myuntis.app.data.repository.SchoolYearOption
 import com.myuntis.app.data.repository.SessionManager
+import com.myuntis.app.data.repository.availableYearsResult
 import com.myuntis.app.domain.model.Absence
 import com.myuntis.app.domain.model.AbsenceStatistics
 import com.myuntis.app.domain.model.SubjectWithGrades
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -55,72 +59,120 @@ data class GradesUiState(
         }
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class GradesViewModel @Inject constructor(
     private val repository: GradesRepository,
-    private val sessionManager: SessionManager
+    private val sessionManager: SessionManager,
+    private val cache: DataCache
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(GradesUiState())
     val uiState: StateFlow<GradesUiState> = _uiState.asStateFlow()
 
     init {
-        loadGrades(); loadAbsences()
-        // Reload after the session was renewed in the background
-        viewModelScope.launch {
-            sessionManager.sessionRenewed.collect { loadGrades(); loadAbsences() }
+        // Whatever is cached shows up at once (no spinner, no flicker)
+        cache.get<List<SubjectWithGrades>>(CacheKeys.grades(null))?.let { list ->
+            _uiState.update { it.copy(isLoadingGrades = false, subjects = list) }
         }
-    }
-
-    fun setTab(tab: GradesTab)          = _uiState.update { it.copy(activeTab = tab) }
-    fun setStatsTab(tab: StatsTab)      = _uiState.update { it.copy(activeStatsTab = tab) }
-
-    fun selectYear(yearId: Int?) {
-        _uiState.update { it.copy(selectedYearId = yearId) }
-        loadGrades()
-    }
-
-    fun loadGrades() {
-        viewModelScope.launch {
-            sessionManager.ensureFresh()
-            _uiState.update { it.copy(isLoadingGrades = true, gradesError = null) }
-            when (val r = repository.getSubjectGrades(_uiState.value.selectedYearId)) {
-                is NetworkResult.Success -> _uiState.update {
-                    it.copy(isLoadingGrades = false, subjects = r.data)
-                }
-                is NetworkResult.Error -> _uiState.update {
-                    it.copy(isLoadingGrades = false, gradesError = r.message, subjects = emptyList())
-                }
-                else -> _uiState.update { it.copy(isLoadingGrades = false) }
-            }
-            // Load the year list once (needs the current year ID saved by the call above)
-            if (_uiState.value.schoolYears.isEmpty()) {
-                val years = repository.getAvailableSchoolYears()
-                _uiState.update { it.copy(schoolYears = years) }
-            }
+        cache.get<List<Absence>>(CacheKeys.ABSENCES)?.let { applyAbsences(it) }
+        cache.get<List<SchoolYearOption>>(CacheKeys.YEARS)?.let { years ->
+            _uiState.update { it.copy(schoolYears = years) }
         }
-    }
 
-    fun loadAbsences() {
+        // Follow the cache: the preloader and refreshes update this screen by themselves
         viewModelScope.launch {
-            sessionManager.ensureFresh()
-            _uiState.update { it.copy(isLoadingAbsences = true, absencesError = null) }
-            when (val r = repository.getAbsences()) {
-                is NetworkResult.Success -> {
-                    val stats = AbsenceStatistics(
-                        totalHours     = r.data.size,
-                        excusedHours   = r.data.count { it.isExcused },
-                        unexcusedHours = r.data.count { !it.isExcused }
-                    )
-                    _uiState.update {
-                        it.copy(isLoadingAbsences = false, absences = r.data, absenceStats = stats)
+            _uiState.map { it.selectedYearId }.distinctUntilChanged()
+                .flatMapLatest { id -> cache.flow<List<SubjectWithGrades>>(CacheKeys.grades(id)) }
+                .collect { list ->
+                    if (list != null) _uiState.update {
+                        it.copy(isLoadingGrades = false, subjects = list, gradesError = null)
                     }
                 }
-                is NetworkResult.Error -> _uiState.update {
-                    it.copy(isLoadingAbsences = false, absencesError = r.message)
-                }
-                else -> _uiState.update { it.copy(isLoadingAbsences = false) }
+        }
+        viewModelScope.launch {
+            cache.flow<List<Absence>>(CacheKeys.ABSENCES).collect { if (it != null) applyAbsences(it) }
+        }
+        viewModelScope.launch {
+            cache.flow<List<SchoolYearOption>>(CacheKeys.YEARS).collect { years ->
+                if (years != null) _uiState.update { it.copy(schoolYears = years) }
             }
+        }
+
+        // Nothing cached yet? Load now (does nothing if the preloader is already on it)
+        loadGradesInternal(force = false)
+        loadAbsencesInternal(force = false)
+    }
+
+    fun setTab(tab: GradesTab)     = _uiState.update { it.copy(activeTab = tab) }
+    fun setStatsTab(tab: StatsTab) = _uiState.update { it.copy(activeStatsTab = tab) }
+
+    fun selectYear(yearId: Int?) {
+        val cached = cache.get<List<SubjectWithGrades>>(CacheKeys.grades(yearId))
+        _uiState.update {
+            it.copy(
+                selectedYearId = yearId,
+                subjects = cached ?: emptyList(),
+                isLoadingGrades = cached == null,
+                gradesError = null
+            )
+        }
+        loadGradesInternal(force = false)
+    }
+
+    // Refresh buttons: force a new download
+    fun loadGrades()   = loadGradesInternal(force = true)
+    fun loadAbsences() = loadAbsencesInternal(force = true)
+
+    private fun loadGradesInternal(force: Boolean) {
+        viewModelScope.launch {
+            val yearId  = _uiState.value.selectedYearId
+            val key     = CacheKeys.grades(yearId)
+            val hadData = cache.get<List<SubjectWithGrades>>(key) != null
+            if (!hadData) _uiState.update { it.copy(isLoadingGrades = true, gradesError = null) }
+
+            val r = cache.load(key, CacheKeys.MAX_AGE_MS, force) {
+                sessionManager.ensureFresh()
+                repository.getSubjectGrades(yearId)
+            }
+            if (r is NetworkResult.Error) {
+                // keep showing cached data; only show the error if there is nothing to show
+                _uiState.update { it.copy(isLoadingGrades = false, gradesError = if (hadData) null else r.message) }
+            } else {
+                _uiState.update { it.copy(isLoadingGrades = false) }
+            }
+
+            if (cache.get<List<SchoolYearOption>>(CacheKeys.YEARS) == null) {
+                cache.load(CacheKeys.YEARS, CacheKeys.MAX_AGE_MS, false) { repository.availableYearsResult() }
+            }
+        }
+    }
+
+    private fun loadAbsencesInternal(force: Boolean) {
+        viewModelScope.launch {
+            val hadData = cache.get<List<Absence>>(CacheKeys.ABSENCES) != null
+            if (!hadData) _uiState.update { it.copy(isLoadingAbsences = true, absencesError = null) }
+
+            val r = cache.load(CacheKeys.ABSENCES, CacheKeys.MAX_AGE_MS, force) {
+                sessionManager.ensureFresh()
+                repository.getAbsences()
+            }
+            if (r is NetworkResult.Error) {
+                _uiState.update { it.copy(isLoadingAbsences = false, absencesError = if (hadData) null else r.message) }
+            } else {
+                _uiState.update { it.copy(isLoadingAbsences = false) }
+            }
+        }
+    }
+
+    private fun applyAbsences(list: List<Absence>) {
+        val stats = AbsenceStatistics(
+            totalHours     = list.size,
+            excusedHours   = list.count { it.isExcused },
+            unexcusedHours = list.count { !it.isExcused }
+        )
+        _uiState.update {
+            it.copy(isLoadingAbsences = false, absences = list, absenceStats = stats, absencesError = null)
         }
     }
 }

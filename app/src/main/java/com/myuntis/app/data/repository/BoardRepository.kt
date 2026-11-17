@@ -277,24 +277,9 @@ class BoardRepository @Inject constructor(
     }
 
     // ── Nickname ──────────────────────────────────────────────
-    suspend fun updateNickname(nickname: String): NetworkResult<Unit> {
-        val json = JsonObject().apply { addProperty("nickname", nickname.trim()) }
-        val r = authedUnit { s ->
-            api.boardUpdateMe("$BASE/me", "Bearer ${s.token}", json.toString().toRequestBody(JSON))
-        }
-        if (r is NetworkResult.Success) saveNickname(nickname.trim())
-        return r
-    }
 
-    suspend fun confirmNickname() = saveNickname(null)
 
-    private suspend fun saveNickname(newName: String?) {
-        val accId = dataStore.activeAccountId.first() ?: return
-        val s = dataStore.loadBoardSessions()[accId] ?: return
-        dataStore.saveBoardSession(
-            accId, s.copy(nickname = newName ?: s.nickname, nicknameConfirmed = true)
-        )
-    }
+
 
     // ─────────────────────────────────────────────────────────
     // SESSION: Untis token → board token

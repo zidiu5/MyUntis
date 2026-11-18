@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -163,6 +164,13 @@ class BoardViewModel @Inject constructor(
         viewModelScope.launch { repository.setDone(postId, done) }
     }
 
+    /** Downloads the file (or takes it from the disk cache). null = failed. */
+    suspend fun fileFor(att: BoardAttachment): File? =
+        when (val r = repository.downloadAttachment(att)) {
+            is NetworkResult.Success -> r.data
+            else -> null
+        }
+
     // ── Create / edit ─────────────────────────────────────────
     fun savePost(editing: BoardPost?, draft: PostDraft, onSuccess: () -> Unit) {
         viewModelScope.launch {
@@ -309,6 +317,8 @@ private val TYPES = listOf(
     "HOMEWORK" to "Hausaufgabe", "EXAM" to "Prüfung", "INFO" to "Info", "FILE" to "Datei"
 )
 
+private const val DONE = "DONE"
+
 private val PICK_TYPES = arrayOf(
     "image/*",
     "application/pdf",
@@ -346,6 +356,9 @@ fun BoardScreen(
     var editing       by remember { mutableStateOf<BoardPost?>(null) }
     var confirmDelete by remember { mutableStateOf<BoardPost?>(null) }
     var confirmReport by remember { mutableStateOf<BoardPost?>(null) }
+
+    val scope = rememberCoroutineScope()
+    var viewer by remember { mutableStateOf<ViewerState?>(null) }
 
     LaunchedEffect(ui.message) {
         ui.message?.let { snackbar.showSnackbar(it); viewModel.messageShown() }
@@ -417,6 +430,17 @@ fun BoardScreen(
         )
     }
 
+    viewer?.let { v ->
+        AttachmentViewer(
+            items = v.items,
+            startIndex = v.index,
+            loadFile = { viewModel.fileFor(it) },
+            onOpenExternal = viewModel::openAttachment,
+            onSave = viewModel::saveAttachment,
+            onDismiss = { viewer = null }
+        )
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
@@ -475,14 +499,27 @@ fun BoardScreen(
                 else -> BoardContent(
                     ui = ui,
                     onFilter = viewModel::setFilter,
-                    onToggleDone = viewModel::toggleDone,
+                    onToggleDone = { id, done ->
+                        viewModel.toggleDone(id, done)
+                        if (done) scope.launch {
+                            snackbar.currentSnackbarData?.dismiss()
+                            val r = snackbar.showSnackbar(
+                                message = "In „Erledigte“ verschoben",
+                                actionLabel = "Rückgängig",
+                                duration = SnackbarDuration.Short
+                            )
+                            if (r == SnackbarResult.ActionPerformed) viewModel.toggleDone(id, false)
+                        }
+                    },
                     onEdit = { viewModel.clearPending(); editing = it; showEditor = true },
                     onDelete = { confirmDelete = it },
                     onReport = { confirmReport = it },
                     onVote = viewModel::vote,
                     onOpenAttachment = viewModel::openAttachment,
                     onSaveAttachment = viewModel::saveAttachment,
-                    onOpenStorage = viewModel::openStorage
+                    onOpenStorage = viewModel::openStorage,
+                    loadFile = { viewModel.fileFor(it) },
+                    onPreview = { items, index -> viewer = ViewerState(items, index) }
                 )
             }
         }
@@ -500,10 +537,17 @@ private fun BoardContent(
     onVote: (String, Boolean) -> Unit,
     onOpenAttachment: (BoardAttachment) -> Unit,
     onSaveAttachment: (BoardAttachment) -> Unit,
-    onOpenStorage: () -> Unit
+    onOpenStorage: () -> Unit,
+    loadFile: suspend (BoardAttachment) -> File?,
+    onPreview: (List<BoardAttachment>, Int) -> Unit
 ) {
     val today = LocalDate.now()
-    val shown = remember(ui.posts, ui.filter, today) { visiblePosts(ui.posts, ui.filter, today) }
+    val shown = remember(ui.posts, ui.filter, ui.doneIds, today) {
+        visiblePosts(ui.posts, ui.filter, ui.doneIds, today)
+    }
+    val doneCount = remember(ui.posts, ui.doneIds) {
+        ui.posts.count { !it.deleted && it.type == "HOMEWORK" && it.id in ui.doneIds }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -516,13 +560,27 @@ private fun BoardContent(
                 items(TYPES) { (type, label) ->
                     FilterChip(ui.filter == type, { onFilter(type) }, { Text(label) })
                 }
+                item {
+                    FilterChip(
+                        selected = ui.filter == DONE,
+                        onClick  = { onFilter(DONE) },
+                        label    = { Text(if (doneCount > 0) "Erledigte ($doneCount)" else "Erledigte") }
+                    )
+                }
             }
         }
 
         if (shown.isEmpty()) {
             item {
-                InfoState("📌", "Noch nichts da",
-                    "Trag die erste Hausaufgabe oder Info für deine Klasse ein.")
+                when {
+                    ui.filter == DONE -> InfoState("✅", "Noch nichts erledigt",
+                        "Abgehakte Hausaufgaben erscheinen hier. Das siehst nur du.")
+                    doneCount > 0 && (ui.filter == null || ui.filter == "HOMEWORK") ->
+                        InfoState("🎉", "Alles erledigt",
+                            "Deine abgehakten Hausaufgaben findest du unter „Erledigte“.")
+                    else -> InfoState("📌", "Noch nichts da",
+                        "Trag die erste Hausaufgabe oder Info für deine Klasse ein.")
+                }
             }
         } else {
             items(shown, key = { it.id }) { post ->
@@ -537,7 +595,9 @@ private fun BoardContent(
                     onReport = { onReport(post) },
                     onVote = { onVote(post.id, it) },
                     onOpenAttachment = onOpenAttachment,
-                    onSaveAttachment = onSaveAttachment
+                    onSaveAttachment = onSaveAttachment,
+                    loadFile = loadFile,
+                    onPreview = onPreview
                 )
             }
         }
@@ -560,10 +620,18 @@ private fun BoardContent(
     }
 }
 
-/** Upcoming deadlines first (soonest on top), then the rest, newest first. */
-private fun visiblePosts(posts: List<BoardPost>, filter: String?, today: LocalDate): List<BoardPost> {
+/** Done homework only shows up under "Erledigte"; upcoming deadlines come first elsewhere. */
+private fun visiblePosts(
+    posts: List<BoardPost>, filter: String?, doneIds: Set<String>, today: LocalDate
+): List<BoardPost> {
     fun due(p: BoardPost): LocalDate? = p.dueDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-    val filtered = posts.filter { !it.deleted && (filter == null || it.type == filter) }
+    fun isDone(p: BoardPost) = p.type == "HOMEWORK" && p.id in doneIds
+    val base = posts.filter { !it.deleted }
+
+    if (filter == DONE) {
+        return base.filter { isDone(it) }.sortedByDescending { due(it) ?: LocalDate.MIN }
+    }
+    val filtered = base.filter { !isDone(it) && (filter == null || it.type == filter) }
     val upcoming = filtered.filter { due(it)?.let { d -> !d.isBefore(today) } == true }.sortedBy { due(it) }
     val ids = upcoming.map { it.id }.toSet()
     val rest = filtered.filter { it.id !in ids }.sortedByDescending { it.createdAt }
@@ -592,7 +660,9 @@ private fun PostCard(
     onReport: () -> Unit,
     onVote: (Boolean) -> Unit,
     onOpenAttachment: (BoardAttachment) -> Unit,
-    onSaveAttachment: (BoardAttachment) -> Unit
+    onSaveAttachment: (BoardAttachment) -> Unit,
+    loadFile: suspend (BoardAttachment) -> File?,
+    onPreview: (List<BoardAttachment>, Int) -> Unit
 ) {
     val mine = post.author?.mine == true
     val surface = MaterialTheme.colorScheme.surface
@@ -710,10 +780,36 @@ private fun PostCard(
                 )
             }
 
-            // Attachments: tap = open, arrow = save to Downloads
-            post.attachments.forEach { att ->
+            // Attachments: images as thumbnails, PDFs in the viewer, other files in another app
+            val images   = post.attachments.filter { it.isImage() }
+            val previews = post.attachments.filter { it.canPreview() }       // viewer list: images + PDFs
+
+            if (images.isNotEmpty()) {
+                val single = images.size == 1
                 Row(
-                    Modifier.fillMaxWidth().clickable { onOpenAttachment(att) }.padding(vertical = 2.dp),
+                    Modifier.fillMaxWidth().then(
+                        if (single) Modifier else Modifier.horizontalScroll(rememberScrollState())
+                    ),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    images.forEach { img ->
+                        ImageThumb(
+                            att = img,
+                            loadFile = loadFile,
+                            modifier = if (single) Modifier.fillMaxWidth().height(180.dp) else Modifier.size(110.dp),
+                            onClick = { onPreview(previews, previews.indexOf(img)) }
+                        )
+                    }
+                }
+            }
+
+            post.attachments.filter { !it.isImage() }.forEach { att ->
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clickable {
+                            if (att.isPdf()) onPreview(previews, previews.indexOf(att)) else onOpenAttachment(att)
+                        }
+                        .padding(vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -721,8 +817,11 @@ private fun PostCard(
                     Column(Modifier.weight(1f)) {
                         Text(att.name, style = MaterialTheme.typography.labelLarge,
                             maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(formatBytes(att.size), style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            formatBytes(att.size) + if (att.isPdf()) " · Vorschau" else " · öffnet in anderer App",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                     if (busyAttachmentId == att.id) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)

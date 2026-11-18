@@ -28,6 +28,7 @@ import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 
+import java.util.concurrent.ConcurrentHashMap
 import android.net.Uri
 import com.google.gson.JsonArray
 import com.myuntis.app.data.network.model.BoardAttachment
@@ -72,6 +73,7 @@ class BoardRepository @Inject constructor(
     }
 
     private val loginMutex = Mutex()
+    private val downloadLocks = ConcurrentHashMap<String, Mutex>()
     private val loggedInThisRun = mutableSetOf<String>()   // account ids
 
     /** Only student accounts (personType 5) may use the board. */
@@ -236,28 +238,31 @@ class BoardRepository @Inject constructor(
     }
 
     suspend fun downloadAttachment(att: BoardAttachment): NetworkResult<File> {
-        val file = files.cacheFile(att.id, att.name)
-        if (file.exists() && file.length() > 0 && (att.size <= 0 || file.length() == att.size)) {
-            return NetworkResult.Success(file)
-        }
-        val resp = when (val r = authedCall { s ->
-            api.boardDownload("$BASE/files/${att.id}", "Bearer ${s.token}")
-        }) {
-            is NetworkResult.Success -> r.data
-            is NetworkResult.Error   -> return NetworkResult.Error(r.message)
-            else                     -> return NetworkResult.Error("Download fehlgeschlagen.")
-        }
-        val body = resp.body() ?: return NetworkResult.Error("Leere Antwort vom Server.")
-        return try {
-            withContext(Dispatchers.IO) {
-                file.delete()
-                val tmp = File(file.parentFile, file.name + ".part")
-                body.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
-                if (!tmp.renameTo(file)) throw java.io.IOException("Datei konnte nicht gespeichert werden.")
+        val lock = downloadLocks.getOrPut(att.id) { Mutex() }
+        return lock.withLock {
+            val file = files.cacheFile(att.id, att.name)
+            if (file.exists() && file.length() > 0 && (att.size <= 0 || file.length() == att.size)) {
+                return@withLock NetworkResult.Success(file)
             }
-            NetworkResult.Success(file)
-        } catch (e: Exception) {
-            NetworkResult.Error(e.localizedMessage ?: "Download fehlgeschlagen.")
+            val resp = when (val r = authedCall { s ->
+                api.boardDownload("$BASE/files/${att.id}", "Bearer ${s.token}")
+            }) {
+                is NetworkResult.Success -> r.data
+                is NetworkResult.Error   -> return@withLock NetworkResult.Error(r.message)
+                else                     -> return@withLock NetworkResult.Error("Download fehlgeschlagen.")
+            }
+            val body = resp.body() ?: return@withLock NetworkResult.Error("Leere Antwort vom Server.")
+            try {
+                withContext(Dispatchers.IO) {
+                    file.delete()
+                    val tmp = File(file.parentFile, file.name + ".part")
+                    body.byteStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
+                    if (!tmp.renameTo(file)) throw java.io.IOException("Datei konnte nicht gespeichert werden.")
+                }
+                NetworkResult.Success(file)
+            } catch (e: Exception) {
+                NetworkResult.Error(e.localizedMessage ?: "Download fehlgeschlagen.")
+            }
         }
     }
 

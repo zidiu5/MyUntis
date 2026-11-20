@@ -14,6 +14,7 @@ import okhttp3.MultipartBody
 import retrofit2.http.Multipart
 import retrofit2.http.Part
 import retrofit2.http.Streaming
+import com.myuntis.app.data.network.model.CalendarEntryDetailResponse
 
 // =============================================================
 // UNTIS API SERVICE
@@ -316,4 +317,16 @@ interface UntisApiService {
         @Url url: String,
         @Header("Authorization") authorization: String
     ): Response<StorageResponse>
+
+    @GET
+    suspend fun getCalendarEntryDetailBearer(
+        @Url url: String,
+        @Header("Authorization") authorization: String
+    ): Response<CalendarEntryDetailResponse>
+
+    @GET
+    suspend fun getCalendarEntryDetail(
+        @Url url: String,
+        @Header("Cookie") sessionCookie: String
+    ): Response<CalendarEntryDetailResponse>
 }

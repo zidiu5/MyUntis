@@ -16,6 +16,8 @@ import java.time.LocalTime
 import java.time.temporal.TemporalAdjusters
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.time.LocalDateTime
+import com.myuntis.app.data.network.model.CalendarEntryDetail
 
 // Simple serialization container – no LocalDate/LocalTime in Gson
 private data class CachedLesson(
@@ -89,6 +91,44 @@ class TimetableRepository @Inject constructor(
             items.mapNotNull { it.toDomain() }
                 .groupBy { it.date }
         } catch (_: Exception) { emptyMap() }
+    }
+
+    /** Extra info for one lesson (exam topic, homework, substitution text ...). */
+    suspend fun getLessonDetail(lesson: Lesson): NetworkResult<CalendarEntryDetail> {
+        for (attempt in 0..1) {
+            val credentials = dataStore.loginCredentials.first()
+            val profile     = dataStore.userProfile.first()
+            val sessionId   = dataStore.sessionId.first()
+                ?: return NetworkResult.Error("Keine aktive Session.")
+            val cookie = sessionId.toSessionCookie()
+
+            val url = UntisApiHelper.buildCalendarEntryDetailUrl(
+                credentials.server, profile.personId,
+                LocalDateTime.of(lesson.date, lesson.startTime),
+                LocalDateTime.of(lesson.date, lesson.endTime)
+            )
+
+            // Bearer first, cookie as fallback
+            val bearer = refreshBearer(credentials.server, cookie)
+            var resp = bearer?.let { b ->
+                runCatching { apiService.getCalendarEntryDetailBearer(url, "Bearer $b") }.getOrNull()
+            }
+            if (resp?.isSuccessful != true || resp.body() == null) {
+                resp = runCatching { apiService.getCalendarEntryDetail(url, cookie) }.getOrNull()
+            }
+
+            val entries = resp?.takeIf { it.isSuccessful }?.body()?.calendarEntries
+            if (entries != null) {
+                val match = entries.firstOrNull { it.subject?.shortName == lesson.subject.shortName }
+                    ?: entries.firstOrNull()
+                    ?: return NetworkResult.Error("Keine Details vorhanden.")
+                return NetworkResult.Success(match)
+            }
+
+            // Session probably expired → log in again and retry once
+            if (attempt == 0 && !authRepository.refreshSession()) break
+        }
+        return NetworkResult.Error("Details konnten nicht geladen werden.")
     }
 
     // ── Core fetch ────────────────────────────────────────────

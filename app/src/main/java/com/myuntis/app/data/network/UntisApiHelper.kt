@@ -4,6 +4,8 @@ import com.myuntis.app.data.network.model.*
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.net.URLEncoder
+import java.time.LocalDateTime
 
 // =============================================================
 // TOP-LEVEL EXTENSION FUNCTIONS
@@ -39,10 +41,6 @@ object UntisApiHelper {
     }
 
     // ── REST Timetable URL ────────────────────────────────────
-    // Matches exactly: /api/rest/view/v1/timetable/entries
-    //   ?start=2026-06-01&end=2026-06-06&format=1
-    //   &resourceType=STUDENT&resources=6425
-    //   &periodTypes=&timetableType=MY_TIMETABLE&layout=START_TIME
     fun buildRestTimetableUrl(
         server: String,
         studentId: Int,
@@ -58,7 +56,6 @@ object UntisApiHelper {
     }
 
     // ── Token URL ─────────────────────────────────────────────
-    // Returns a short-lived JWT Bearer token from the active session
     fun buildTokenUrl(server: String): String {
         val host = server.trim().lowercase().removeSuffix(".webuntis.com")
         return "https://$host.webuntis.com/WebUntis/api/token/new"
@@ -112,9 +109,8 @@ object UntisApiHelper {
             "endDate"   to endDate.toUntisDate()
         )
     )
+
     // Homework API URL
-// Example: https://lbs-brixen.webuntis.com/WebUntis/api/homeworks/lessons
-//          ?startDate=20260601&endDate=20260630
     fun buildHomeworkRestUrl(
         server: String,
         startDate: LocalDate,
@@ -126,6 +122,7 @@ object UntisApiHelper {
         return "https://$host.webuntis.com/WebUntis/api/homeworks/lessons" +
                 "?startDate=$start&endDate=$end"
     }
+
     // Grades overview
     fun buildGradesRestUrl(server: String): String {
         val host = server.trim().lowercase().removeSuffix(".webuntis.com")
@@ -133,7 +130,6 @@ object UntisApiHelper {
     }
 
     // Absences list
-// FIXED: correct URL + studentId + excuseStatusId param
     fun buildAbsencesRestUrl(
         server: String,
         studentId: Int,
@@ -147,7 +143,7 @@ object UntisApiHelper {
                 "?startDate=$start&endDate=$end&studentId=$studentId&excuseStatusId=-1"
     }
 
-    // FIXED: schoolyearId is now optional (call without it first to detect current year)
+    // Grading List
     fun buildGradingListUrl(
         server: String,
         studentId: Int,
@@ -206,5 +202,17 @@ object UntisApiHelper {
         val end   = LocalDate.now().plusWeeks(1).toString()
         return "https://$host.webuntis.com/WebUntis/api/rest/view/v1/timetable/filter" +
                 "?resourceType=STUDENT&timetableType=MY_TIMETABLE&start=$start&end=$end"
+    }
+
+    // ── NEU: Calendar Entry Detail URL ────────────────────────
+    fun buildCalendarEntryDetailUrl(
+        server: String, studentId: Int, start: LocalDateTime, end: LocalDateTime
+    ): String {
+        val host = server.trim().lowercase().removeSuffix(".webuntis.com")
+        val fmt  = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
+        fun enc(d: LocalDateTime) = URLEncoder.encode(d.format(fmt), "UTF-8")
+        return "https://$host.webuntis.com/WebUntis/api/rest/view/v2/calendar-entry/detail" +
+                "?elementId=$studentId&elementType=5&endDateTime=${enc(end)}" +
+                "&homeworkOption=DUE&startDateTime=${enc(start)}"
     }
 }

@@ -7,10 +7,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
@@ -30,15 +30,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.myuntis.app.data.network.model.CalendarRef
 import com.myuntis.app.domain.model.*
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.time.temporal.ChronoUnit
+import java.time.temporal.TemporalAdjusters
 import java.util.Locale
-
+import androidx.compose.foundation.ExperimentalFoundationApi
 
 // =============================================================
 // TIMETABLE SCREEN
@@ -119,56 +122,54 @@ fun TimetableScreen(viewModel: TimetableViewModel = hiltViewModel()) {
             }
         }
 
-        // ── Main content ────────────────────────────────────
-        // swipeDelta accumulates horizontal drag; threshold 80dp triggers nav
-        var swipeDelta by remember { mutableFloatStateOf(0f) }
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(uiState.viewMode, uiState.selectedDate) {
-                    detectHorizontalDragGestures(
-                        onDragStart  = { swipeDelta = 0f },
-                        onDragEnd    = {
-                            when {
-                                swipeDelta >  80f -> viewModel.navigatePrevious()
-                                swipeDelta < -80f -> viewModel.navigateNext()
-                            }
-                            swipeDelta = 0f
-                        },
-                        onHorizontalDrag = { change, dragAmount ->
-                            swipeDelta += dragAmount
-                            change.consume()
-                        }
-                    )
-                }
-        ) {
-            if (uiState.isLoading) {
+        // ── Main content ────────────────────────────────────────────
+        Box(modifier = Modifier.fillMaxSize()) {
+            // The big spinner only shows before the very first data arrives
+            if (uiState.isLoading && uiState.lessonsByDate.isEmpty()) {
                 TimetableLoadingState()
             } else {
                 AnimatedContent(
-                    targetState   = uiState.viewMode,
+                    targetState    = uiState.viewMode,
                     transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(200)) },
-                    label         = "view_mode"
+                    label          = "view_mode"
                 ) { mode ->
                     when (mode) {
-                        TimetableViewMode.DAY ->
-                            DayView(uiState.selectedDayLessons, uiState.selectedDate, uiState.subjectColors)
+                        TimetableViewMode.DAY -> SlidingPager(
+                            page      = dayPage(uiState.selectedDate),
+                            onSettled = { p -> viewModel.onDayPageSelected(dayDate(p)) }
+                        ) { p ->
+                            DayPage(uiState, dayDate(p), viewModel::openLesson)
+                        }
 
-                        TimetableViewMode.WEEK ->
-                            WeekGridView(uiState) { date ->
+                        TimetableViewMode.WEEK -> SlidingPager(
+                            page      = weekPage(uiState.selectedDate),
+                            onSettled = { p -> viewModel.onWeekPageSelected(weekMonday(p)) }
+                        ) { p ->
+                            WeekGridView(uiState, weekMonday(p), viewModel::openLesson)
+                        }
+
+                        TimetableViewMode.MONTH -> SlidingPager(
+                            page      = monthPage(uiState.displayedMonth),
+                            onSettled = { p -> viewModel.onMonthPageSelected(monthOf(p)) }
+                        ) { p ->
+                            MonthView(uiState, monthOf(p)) { date ->
                                 viewModel.selectDate(date)
                                 viewModel.setViewMode(TimetableViewMode.DAY)
                             }
-
-                        TimetableViewMode.MONTH ->
-                            MonthView(uiState) { date ->
-                                viewModel.selectDate(date)
-                                viewModel.setViewMode(TimetableViewMode.DAY)
-                            }
+                        }
                     }
                 }
             }
+        }
+
+        // ── Lesson popup ────────────────────────────────────────────
+        uiState.selectedLesson?.let { lesson ->
+            LessonDetailSheet(
+                lesson       = lesson,
+                detail       = uiState.detail,
+                customColors = uiState.subjectColors,
+                onDismiss    = viewModel::closeLesson
+            )
         }
     }
 }
@@ -265,6 +266,64 @@ private fun DateNavigationHeader(
 }
 
 // =============================================================
+// SLIDING PAGER – swipe follows the finger, arrows slide too
+// =============================================================
+private const val PAGE_COUNT = 20_000
+private val EPOCH_MONDAY: LocalDate = LocalDate.of(2020, 1, 6)       // a Monday
+private val EPOCH_MONTH: YearMonth = YearMonth.of(2020, 1)
+
+private fun dayPage(d: LocalDate) =
+    ChronoUnit.DAYS.between(EPOCH_MONDAY, d).toInt().coerceIn(0, PAGE_COUNT - 1)
+private fun dayDate(p: Int): LocalDate = EPOCH_MONDAY.plusDays(p.toLong())
+
+private fun weekPage(d: LocalDate) = ChronoUnit.WEEKS.between(
+    EPOCH_MONDAY, d.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+).toInt().coerceIn(0, PAGE_COUNT - 1)
+private fun weekMonday(p: Int): LocalDate = EPOCH_MONDAY.plusWeeks(p.toLong())
+
+private fun monthPage(m: YearMonth) =
+    ChronoUnit.MONTHS.between(EPOCH_MONTH, m).toInt().coerceIn(0, PAGE_COUNT - 1)
+private fun monthOf(p: Int): YearMonth = EPOCH_MONTH.plusMonths(p.toLong())
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SlidingPager(
+    page: Int,                          // page the app state says we should be on
+    onSettled: (Int) -> Unit,           // finger swipe ended on this page
+    content: @Composable (Int) -> Unit
+) {
+    val pagerState = rememberPagerState(initialPage = page, pageCount = { PAGE_COUNT })
+    val currentOnSettled by rememberUpdatedState(onSettled)
+
+    // Changed from outside (arrows, "Heute", month → day): slide there
+    LaunchedEffect(page) {
+        if (pagerState.currentPage != page) pagerState.animateScrollToPage(page)
+    }
+    // Finished a swipe: tell the app (idempotent, so the loop above does not repeat)
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }.collect { currentOnSettled(it) }
+    }
+
+    HorizontalPager(
+        state    = pagerState,
+        modifier = Modifier.fillMaxSize(),
+        key      = { it }
+    ) { p -> content(p) }
+}
+
+@Composable
+private fun DayPage(uiState: TimetableUiState, date: LocalDate, onLessonClick: (Lesson) -> Unit) {
+    val lessons = uiState.lessonsByDate[date].orEmpty()
+    val loaded = lessons.isNotEmpty() ||
+            date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)) in uiState.loadedWeeks
+    if (!loaded) {
+        Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
+    } else {
+        DayView(lessons, date, uiState.subjectColors, onLessonClick)
+    }
+}
+
+// =============================================================
 // WEEK GRID VIEW
 // Auto-fits all lessons into the available screen height.
 // No vertical scroll – everything visible at once.
@@ -272,18 +331,19 @@ private fun DateNavigationHeader(
 @Composable
 private fun WeekGridView(
     uiState: TimetableUiState,
-    onDaySelected: (LocalDate) -> Unit
+    monday: LocalDate,
+    onLessonClick: (Lesson) -> Unit
 ) {
-    val weekDates  = uiState.weekDates
+    val weekDates  = remember(monday) { (0L..5L).map { monday.plusDays(it) } }
     val today      = LocalDate.now()
     val allLessons = weekDates.flatMap { uiState.lessonsByDate[it] ?: emptyList() }
 
     if (allLessons.isEmpty()) {
-        EmptyWeekState()
+        if (monday in uiState.loadedWeeks) EmptyWeekState()
+        else Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
         return
     }
 
-    // Grid bounds derived from actual lesson times
     val gridStartMin = allLessons
         .minOf { it.startTime.hour * 60 + it.startTime.minute }
         .let { (it - 5).coerceAtLeast(6 * 60) }
@@ -291,21 +351,17 @@ private fun WeekGridView(
         .maxOf { it.endTime.hour * 60 + it.endTime.minute }
         .let { (it + 10).coerceAtMost(22 * 60) }
 
-    // Show both start AND end times → grid visually extends to lesson end
-    val timeLabels = (
-            allLessons.map { it.startTime } +
-                    allLessons.map { it.endTime }
-            ).distinct().sorted()
+    val timeLabels = (allLessons.map { it.startTime } + allLessons.map { it.endTime })
+        .distinct().sorted()
     val timeColWidth = 44.dp
 
-    // Theme colours captured before entering Canvas/lambda context
-    val divColor    = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
-    val todayBg     = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.07f)
-    val surfaceBg   = MaterialTheme.colorScheme.surface
+    val divColor  = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f)
+    val todayBg   = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.07f)
+    val surfaceBg = MaterialTheme.colorScheme.surface
 
     Column(modifier = Modifier.fillMaxSize()) {
 
-        // ── Fixed day-header row ─────────────────────────────
+        // ── Day header row ───────────────────────────────────
         Row(modifier = Modifier.fillMaxWidth().background(surfaceBg)) {
             Box(
                 modifier = Modifier.width(timeColWidth).padding(vertical = 4.dp),
@@ -320,40 +376,30 @@ private fun WeekGridView(
                 )
             }
             weekDates.forEach { date ->
-                WeekDayHeaderCell(
-                    date     = date,
-                    isToday  = date == today,
-                    modifier = Modifier.weight(1f)
-                )
+                WeekDayHeaderCell(date = date, isToday = date == today, modifier = Modifier.weight(1f))
             }
         }
-
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
-        // ── Auto-fit grid (BoxWithConstraints) ───────────────
-        // minuteHeightDp is computed so ALL lessons fit the screen height exactly.
+        // ── Auto-fit grid ────────────────────────────────────
         BoxWithConstraints(modifier = Modifier.fillMaxWidth().weight(1f)) {
             val availableHeight = this.maxHeight
-            val gridMinutes    = (gridEndMin - gridStartMin).toFloat().coerceAtLeast(1f)
-            val minuteHeightDp = (availableHeight.value / gridMinutes).dp
+            val gridMinutes     = (gridEndMin - gridStartMin).toFloat().coerceAtLeast(1f)
+            val minuteHeightDp  = (availableHeight.value / gridMinutes).dp
 
             Row(modifier = Modifier.fillMaxSize()) {
 
-                // Time labels column
+                // Time labels
                 Box(modifier = Modifier.width(timeColWidth).fillMaxHeight()) {
                     timeLabels.forEach { time ->
-                        val minFromStart = (time.hour * 60 + time.minute - gridStartMin)
-                        val yDp = (minuteHeightDp * minFromStart.toFloat() - 7.dp)
-                            .coerceAtLeast(0.dp)
+                        val minFromStart = time.hour * 60 + time.minute - gridStartMin
+                        val yDp = (minuteHeightDp * minFromStart.toFloat() - 7.dp).coerceAtLeast(0.dp)
                         Text(
-                            text     = time.toString().take(5),
-                            modifier = Modifier
-                                .offset(y = yDp)
-                                .fillMaxWidth()
-                                .padding(end = 3.dp),
+                            text = time.toString().take(5),
+                            modifier = Modifier.offset(y = yDp).fillMaxWidth().padding(end = 3.dp),
                             textAlign = TextAlign.End,
-                            fontSize  = 9.sp,
-                            color     = MaterialTheme.colorScheme.onSurfaceVariant
+                            fontSize = 9.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -361,17 +407,13 @@ private fun WeekGridView(
                 // One column per day
                 weekDates.forEach { date ->
                     val dayLessons = uiState.lessonsByDate[date] ?: emptyList()
-                    val isToday    = date == today
+                    val isToday = date == today
 
                     BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxHeight()) {
                         val colWidth = this.maxWidth
 
-                        // Today highlight
-                        if (isToday) {
-                            Box(Modifier.fillMaxSize().background(todayBg))
-                        }
+                        if (isToday) Box(Modifier.fillMaxSize().background(todayBg))
 
-                        // Horizontal grid lines at lesson-start times
                         timeLabels.forEach { time ->
                             val minFromStart = time.hour * 60 + time.minute - gridStartMin
                             Box(
@@ -383,30 +425,22 @@ private fun WeekGridView(
                             )
                         }
 
-                        // Lesson blocks with side-by-side overlap handling
-                        val groups = groupSideBySide(dayLessons)
-                        groups.forEach { group ->
+                        groupSideBySide(dayLessons).forEach { group ->
                             val cnt = group.size
                             group.forEachIndexed { idx, lesson ->
-                                val startMin = (lesson.startTime.hour * 60 +
-                                        lesson.startTime.minute - gridStartMin)
-                                val endMin   = (lesson.endTime.hour * 60 +
-                                        lesson.endTime.minute - gridStartMin)
+                                val startMin = lesson.startTime.hour * 60 + lesson.startTime.minute - gridStartMin
+                                val endMin   = lesson.endTime.hour * 60 + lesson.endTime.minute - gridStartMin
                                 if (startMin < 0) return@forEachIndexed
 
-                                val yDp  = minuteHeightDp * startMin.toFloat()
-                                val hDp  = (minuteHeightDp * (endMin - startMin).toFloat())
-                                    .coerceAtLeast(14.dp)
-                                val xDp  = (colWidth.value / cnt * idx).dp
-                                val wDp  = (colWidth.value / cnt).dp - 1.5.dp
+                                val yDp = minuteHeightDp * startMin.toFloat()
+                                val hDp = (minuteHeightDp * (endMin - startMin).toFloat()).coerceAtLeast(14.dp)
+                                val xDp = (colWidth.value / cnt * idx).dp
+                                val wDp = (colWidth.value / cnt).dp - 1.5.dp
 
                                 LessonGridBlock(
                                     lesson       = lesson,
-                                    modifier     = Modifier
-                                        .offset(x = xDp, y = yDp)
-                                        .width(wDp)
-                                        .height(hDp),
-                                    onClick      = { onDaySelected(date) },
+                                    modifier     = Modifier.offset(x = xDp, y = yDp).width(wDp).height(hDp),
+                                    onClick      = { onLessonClick(lesson) },     // ← popup, not day view
                                     customColors = uiState.subjectColors
                                 )
                             }
@@ -504,8 +538,6 @@ private fun LessonGridBlock(
             else Modifier
         )
     ) {
-        // Capture constraints as local vals BEFORE entering nested lambdas.
-        // Inside Column {}, the BoxWithConstraints implicit receiver is lost.
         val blockWidth  = this.maxWidth
         val blockHeight = this.maxHeight
         val isNarrow    = blockWidth  < 38.dp
@@ -547,7 +579,6 @@ private fun LessonGridBlock(
                     )
                 }
             }
-            // Uses captured val – no BoxWithConstraints receiver needed
             if (showRoom) {
                 lesson.rooms.firstOrNull()?.let { room ->
                     Text(
@@ -575,7 +606,8 @@ private fun LessonGridBlock(
 private fun DayView(
     lessons: List<Lesson>,
     selectedDate: LocalDate,
-    customColors: Map<String, String> = emptyMap()
+    customColors: Map<String, String> = emptyMap(),
+    onLessonClick: (Lesson) -> Unit = {}
 ) {
     if (lessons.isEmpty()) {
         EmptyDayContent(selectedDate)
@@ -588,7 +620,7 @@ private fun DayView(
     ) {
         // FIX: Use itemsIndexed with a composite key so multiple lessons with the same ID don't crash
         itemsIndexed(lessons, key = { i, l -> "${l.id}_${l.startTime}_$i" }) { _, lesson ->
-            LessonDetailCard(lesson, customColors)
+            LessonDetailCard(lesson, customColors, onClick = { onLessonClick(lesson) })
         }
     }
 }
@@ -596,7 +628,8 @@ private fun DayView(
 @Composable
 private fun LessonDetailCard(
     lesson: Lesson,
-    customColors: Map<String, String> = emptyMap()
+    customColors: Map<String, String> = emptyMap(),
+    onClick: () -> Unit = {}
 ) {
     val isCancelled = lesson.isCancelled
     val now         = LocalTime.now()
@@ -624,7 +657,9 @@ private fun LessonDetailCard(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(if (outerBorderColor != null) 2.dp else 0.dp),
+                .padding(if (outerBorderColor != null) 2.dp else 0.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .clickable(onClick = onClick),
             shape  = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(
                 containerColor = when {
@@ -750,9 +785,9 @@ private fun IconTextRow(icon: ImageVector, text: String, alpha: Float) {
 @Composable
 private fun MonthView(
     uiState: TimetableUiState,
+    month: YearMonth,
     onDateSelected: (LocalDate) -> Unit
 ) {
-    val month       = uiState.displayedMonth
     val firstDay    = month.atDay(1)
     val startOffset = firstDay.dayOfWeek.value - 1   // 0 = Monday
     val daysInMonth = month.lengthOfMonth()
@@ -1016,4 +1051,166 @@ private fun subjectColor(
         Color(0xFF4E342E), Color(0xFF0277BD)
     )
     return palette[(shortName.hashCode() and 0x7FFFFFFF) % palette.size]
+}
+
+// =============================================================
+// LESSON POPUP
+// =============================================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LessonDetailSheet(
+    lesson: Lesson,
+    detail: LessonDetailState,
+    customColors: Map<String, String>,
+    onDismiss: () -> Unit
+) {
+    val entry = (detail as? LessonDetailState.Ready)?.entry
+    val color = subjectColor(lesson.subject.shortName, customColors)
+    val gray  = MaterialTheme.colorScheme.onSurfaceVariant
+
+    val title = entry?.subject?.longName?.takeIf { it.isNotBlank() }
+        ?: lesson.subject.longName.ifBlank { lesson.subject.shortName }
+    val dateText = lesson.date.format(DateTimeFormatter.ofPattern("EEEE, dd. MMMM", Locale.GERMAN))
+    val timeText = "${lesson.startTime.toString().take(5)} – ${lesson.endTime.toString().take(5)}"
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Header
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(Modifier.width(5.dp).height(48.dp).clip(RoundedCornerShape(3.dp)).background(color))
+                Column {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        textDecoration = if (lesson.isCancelled) TextDecoration.LineThrough else TextDecoration.None
+                    )
+                    Text("$dateText · $timeText", style = MaterialTheme.typography.bodyMedium, color = gray)
+                }
+            }
+
+            // Status chips (known right away from the timetable)
+            val chips = buildList {
+                if (lesson.isCancelled) add("Entfällt" to Color(0xFFFF4444))
+                if (lesson.code == LessonCode.IRREGULAR) add("Vertretung" to Color(0xFF44FF88))
+                if (lesson.code == LessonCode.ADDITIONAL) add("Zusatzstunde" to Color(0xFF44FF88))
+                if (lesson.lessonType == LessonType.EXAM) add("Prüfung" to Color(0xFFFFD600))
+            }
+            if (chips.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    chips.forEach { (text, c) -> StatusChip(text, c) }
+                }
+            }
+
+            // Teachers
+            DetailRow(Icons.Outlined.Person, "Lehrer") {
+                when {
+                    entry != null && entry.teachers.isNotEmpty() -> entry.teachers.forEach { RefLine(it) }
+                    lesson.teachers.isNotEmpty() -> Text(lesson.teachers.joinToString(", "))
+                    else -> Text("–", color = gray)
+                }
+            }
+
+            // Rooms
+            DetailRow(Icons.Outlined.MeetingRoom, "Raum") {
+                when {
+                    entry != null && entry.rooms.isNotEmpty() -> entry.rooms.forEach { RefLine(it) }
+                    lesson.rooms.isNotEmpty() -> Text(lesson.rooms.joinToString(", "))
+                    else -> Text("–", color = gray)
+                }
+            }
+
+            // Loading / failed hint
+            if (detail is LessonDetailState.Loading) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Text("Details werden geladen …", style = MaterialTheme.typography.labelMedium, color = gray)
+                }
+            }
+            if (detail is LessonDetailState.Failed) {
+                Text("Weitere Details konnten nicht geladen werden.",
+                    style = MaterialTheme.typography.labelMedium, color = gray)
+            }
+
+            // Details from Untis
+            entry?.exam?.let { ex ->
+                DetailRow(Icons.Outlined.School, "Prüfung") {
+                    Text(ex.name.orEmpty(), fontWeight = FontWeight.SemiBold)
+                    ex.description?.takeIf { it.isNotBlank() }?.let { Text(it) }
+                }
+            }
+            entry?.substText?.takeIf { it.isNotBlank() }?.let {
+                DetailRow(Icons.Outlined.SwapHoriz, "Vertretung") { Text(it) }
+            }
+            if (entry?.exam == null) {
+                entry?.lessonInfo?.takeIf { it.isNotBlank() }?.let {
+                    DetailRow(Icons.Outlined.Info, "Info") { Text(it) }
+                }
+            }
+            entry?.homeworks?.takeIf { it.isNotEmpty() }?.let { list ->
+                DetailRow(Icons.Outlined.EditNote, "Hausaufgaben") {
+                    list.forEach { hw ->
+                        Text(hw.text.orEmpty())
+                        formatDue(hw.dueDateTime)?.let {
+                            Text("Fällig: $it", style = MaterialTheme.typography.labelMedium, color = gray)
+                        }
+                        hw.remark?.takeIf { it.isNotBlank() }?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall, color = gray)
+                        }
+                    }
+                }
+            }
+            entry?.notesAll?.takeIf { it.isNotBlank() }?.let {
+                DetailRow(Icons.Outlined.Notes, "Notiz") { Text(it) }
+            }
+            entry?.teachingContent?.takeIf { it.isNotBlank() }?.let {
+                DetailRow(Icons.Outlined.Notes, "Unterrichtsinhalt") { Text(it) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailRow(
+    icon: ImageVector,
+    label: String,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Icon(icon, null, Modifier.size(22.dp).padding(top = 2.dp), tint = MaterialTheme.colorScheme.primary)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun RefLine(ref: CalendarRef) {
+    val name  = ref.longName?.takeIf { it.isNotBlank() } ?: ref.displayName ?: ref.shortName.orEmpty()
+    val short = ref.shortName?.takeIf { it.isNotBlank() && it != name }
+    val removed = ref.status == "REMOVED"
+    val added   = ref.status == "ADDED"
+    Text(
+        text = name + (short?.let { " ($it)" } ?: "") +
+                when { added -> " · neu"; removed -> " · entfällt"; else -> "" },
+        style = MaterialTheme.typography.bodyMedium,
+        textDecoration = if (removed) TextDecoration.LineThrough else TextDecoration.None,
+        color = if (added) Color(0xFF2E9E4F) else MaterialTheme.colorScheme.onSurface
+    )
+}
+
+private fun formatDue(raw: String?): String? {
+    if (raw.isNullOrBlank()) return null
+    return runCatching {
+        java.time.LocalDateTime.parse(raw).toLocalDate()
+            .format(DateTimeFormatter.ofPattern("EEE, dd.MM.", Locale.GERMAN))
+    }.getOrDefault(raw)
 }

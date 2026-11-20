@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.myuntis.app.data.local.DataStoreManager
 import com.myuntis.app.data.network.NetworkResult
+import com.myuntis.app.data.network.model.CalendarEntryDetail
 import com.myuntis.app.data.repository.CacheKeys
 import com.myuntis.app.data.repository.DataCache
 import com.myuntis.app.data.repository.SessionManager
@@ -18,6 +19,12 @@ import java.time.YearMonth
 import java.time.temporal.TemporalAdjusters
 import javax.inject.Inject
 
+sealed interface LessonDetailState {
+    data object Loading : LessonDetailState
+    data object Failed : LessonDetailState
+    data class Ready(val entry: CalendarEntryDetail) : LessonDetailState
+}
+
 enum class TimetableViewMode(val label: String) {
     DAY("Tag"), WEEK("Woche"), MONTH("Monat")
 }
@@ -30,7 +37,10 @@ data class TimetableUiState(
     val isLoading: Boolean              = true,
     val isRefreshing: Boolean           = false,
     val errorMessage: String?           = null,
-    val subjectColors: Map<String, String> = emptyMap()
+    val subjectColors: Map<String, String> = emptyMap(),
+    val loadedWeeks: Set<LocalDate> = emptySet(),     // weeks we already asked the server for
+    val selectedLesson: Lesson? = null,               // lesson shown in the popup
+    val detail: LessonDetailState = LessonDetailState.Loading
 ) {
     val weekDates: List<LocalDate>
         get() {
@@ -54,6 +64,9 @@ class TimetableViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(TimetableUiState())
     val uiState: StateFlow<TimetableUiState> = _uiState.asStateFlow()
 
+    private fun mondayOf(d: LocalDate): LocalDate =
+        d.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+
     init {
         // Observe subject color preferences
         viewModelScope.launch {
@@ -65,11 +78,16 @@ class TimetableViewModel @Inject constructor(
         // The preloader (or this screen) fills the cache → merge it into the UI
         viewModelScope.launch {
             cache.flow<List<Lesson>>(CacheKeys.TIMETABLE).collect { lessons ->
-                if (lessons != null) _uiState.update { st ->
-                    st.copy(
-                        isLoading = false, isRefreshing = false, errorMessage = null,
-                        lessonsByDate = st.lessonsByDate + lessons.groupBy { it.date }
-                    )
+                if (lessons != null) {
+                    val todayMonday = mondayOf(LocalDate.now())
+                    val window = (-3L..5L).map { todayMonday.plusWeeks(it) }   // = range of prefetchMultipleWeeks()
+                    _uiState.update { st ->
+                        st.copy(
+                            isLoading = false, isRefreshing = false, errorMessage = null,
+                            lessonsByDate = st.lessonsByDate + lessons.groupBy { it.date },
+                            loadedWeeks = st.loadedWeeks + window + lessons.map { mondayOf(it.date) }
+                        )
+                    }
                 }
             }
         }
@@ -90,7 +108,10 @@ class TimetableViewModel @Inject constructor(
         val cached = repository.getCachedLessons()
         if (cached.isNotEmpty()) {
             _uiState.update {
-                it.copy(lessonsByDate = cached, isLoading = false)
+                it.copy(
+                    lessonsByDate = cached, isLoading = false,
+                    loadedWeeks = it.loadedWeeks + cached.keys.map { d -> mondayOf(d) }
+                )
             }
         }
         // If cache is empty, keep isLoading=true until prefetch finishes
@@ -188,46 +209,69 @@ class TimetableViewModel @Inject constructor(
     fun refresh() {
         _uiState.update { it.copy(isRefreshing = true, errorMessage = null) }
         prefetchInBackground(force = true)
+        val monday = mondayOf(_uiState.value.selectedDate)
+        _uiState.update { it.copy(loadedWeeks = it.loadedWeeks - monday) }
+        ensureWeekLoaded(monday)
     }
+
+    // ── Pager reports a finished swipe ────────────────────────
+    fun onDayPageSelected(date: LocalDate) {
+        if (date == _uiState.value.selectedDate) return
+        _uiState.update { it.copy(selectedDate = date) }
+        ensureWeekLoaded(date)
+    }
+
+    fun onWeekPageSelected(monday: LocalDate) {
+        val current = _uiState.value.selectedDate
+        if (mondayOf(current) == monday) return
+        val newDate = monday.plusDays((current.dayOfWeek.value - 1).toLong())   // same weekday
+        _uiState.update { it.copy(selectedDate = newDate) }
+        ensureWeekLoaded(newDate)
+    }
+
+    fun onMonthPageSelected(month: YearMonth) {
+        if (month == _uiState.value.displayedMonth) return
+        _uiState.update { it.copy(displayedMonth = month) }
+        ensureMonthLoaded(month)
+    }
+
+    // ── Lesson popup ──────────────────────────────────────────
+    fun openLesson(lesson: Lesson) {
+        _uiState.update { it.copy(selectedLesson = lesson, detail = LessonDetailState.Loading) }
+        viewModelScope.launch {
+            val key = "lesson:${lesson.date}|${lesson.startTime}|${lesson.endTime}|${lesson.subject.shortName}"
+            val r = cache.load(key, CacheKeys.MAX_AGE_MS, false) {
+                sessionManager.ensureFresh()
+                repository.getLessonDetail(lesson)
+            }
+            if (_uiState.value.selectedLesson != lesson) return@launch   // closed or another one opened
+            _uiState.update {
+                it.copy(detail = if (r is NetworkResult.Success) LessonDetailState.Ready(r.data)
+                else LessonDetailState.Failed)
+            }
+        }
+    }
+
+    fun closeLesson() = _uiState.update { it.copy(selectedLesson = null) }
 
     // ── Stale-while-revalidate helpers ────────────────────────
 
-    /**
-     * If the week for [date] is already in state (from cache or previous load),
-     * show it instantly and refresh silently.
-     * If it's not in state, show a loading spinner.
-     */
     private fun ensureWeekLoaded(date: LocalDate) {
+        val monday = mondayOf(date)
+        if (monday in _uiState.value.loadedWeeks) return      // prefetch / cache / earlier visit
         viewModelScope.launch {
-            val monday   = date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-            val saturday = monday.plusDays(5)
-            val weekDates = (0L..5L).map { monday.plusDays(it) }
-
-            // Check if ANY day of this week is already loaded
-            val alreadyInState = weekDates.any {
-                _uiState.value.lessonsByDate.containsKey(it)
-            }
-
-            // Show spinner only for uncached weeks
-            if (!alreadyInState) {
-                _uiState.update { it.copy(isLoading = true, errorMessage = null) }
-            }
-
-            when (val r = repository.getLessonsForRange(monday, saturday)) {
-                is NetworkResult.Success -> _uiState.update { state ->
-                    state.copy(
-                        isLoading    = false,
-                        isRefreshing = false,
-                        lessonsByDate = state.lessonsByDate + r.data.groupBy { it.date }
+            when (val r = repository.getLessonsForRange(monday, monday.plusDays(5))) {
+                is NetworkResult.Success -> _uiState.update { st ->
+                    st.copy(
+                        isLoading = false, isRefreshing = false,
+                        lessonsByDate = st.lessonsByDate + r.data.groupBy { it.date },
+                        loadedWeeks = st.loadedWeeks + monday
                     )
                 }
-                is NetworkResult.Error -> _uiState.update { state ->
-                    state.copy(
-                        isLoading    = false,
-                        isRefreshing = false,
-                        // Suppress error when we already have something to show
-                        errorMessage = if (!alreadyInState) r.message else null
-                    )
+                is NetworkResult.Error -> _uiState.update {
+                    // mark as loaded so the page shows "no lessons" + the error banner, not a spinner forever
+                    it.copy(isLoading = false, isRefreshing = false,
+                        errorMessage = r.message, loadedWeeks = it.loadedWeeks + monday)
                 }
                 else -> _uiState.update { it.copy(isLoading = false, isRefreshing = false) }
             }
@@ -235,30 +279,21 @@ class TimetableViewModel @Inject constructor(
     }
 
     private fun ensureMonthLoaded(month: YearMonth) {
+        val mondays = generateSequence(mondayOf(month.atDay(1))) { it.plusWeeks(1) }
+            .takeWhile { !it.isAfter(month.atEndOfMonth()) }.toList()
+        if (mondays.all { it in _uiState.value.loadedWeeks }) return
         viewModelScope.launch {
-            val start = month.atDay(1)
-            val end   = month.atEndOfMonth()
-            val alreadyInState = _uiState.value.lessonsByDate.keys
-                .any { it.month == month.month && it.year == month.year }
-
-            if (!alreadyInState) {
-                _uiState.update { it.copy(isLoading = true) }
-            }
-
-            when (val r = repository.getLessonsForRange(start, end)) {
-                is NetworkResult.Success -> _uiState.update { state ->
-                    state.copy(
-                        isLoading    = false,
-                        isRefreshing = false,
-                        lessonsByDate = state.lessonsByDate + r.data.groupBy { it.date }
+            when (val r = repository.getLessonsForRange(month.atDay(1), month.atEndOfMonth())) {
+                is NetworkResult.Success -> _uiState.update { st ->
+                    st.copy(
+                        isLoading = false, isRefreshing = false,
+                        lessonsByDate = st.lessonsByDate + r.data.groupBy { it.date },
+                        loadedWeeks = st.loadedWeeks + mondays
                     )
                 }
-                is NetworkResult.Error -> _uiState.update { state ->
-                    state.copy(
-                        isLoading    = false,
-                        isRefreshing = false,
-                        errorMessage = if (!alreadyInState) r.message else null
-                    )
+                is NetworkResult.Error -> _uiState.update {
+                    it.copy(isLoading = false, isRefreshing = false,
+                        errorMessage = r.message, loadedWeeks = it.loadedWeeks + mondays)
                 }
                 else -> _uiState.update { it.copy(isLoading = false, isRefreshing = false) }
             }

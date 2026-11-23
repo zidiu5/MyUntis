@@ -1,25 +1,22 @@
 package com.myuntis.app
 
 import android.app.Application
+import com.myuntis.app.data.notifications.Notifier
 import dagger.hilt.android.HiltAndroidApp
+import javax.inject.Inject
 
 // =============================================================
 // APPLICATION CLASS
 // =============================================================
-// Every Android app has an Application class - it's the first
-// object created when the app starts, before any Activity.
-//
-// @HiltAndroidApp triggers Hilt's code generation and creates
-// the application-level dependency injection component.
-// This MUST be declared in AndroidManifest.xml (android:name)
-// =============================================================
 @HiltAndroidApp
 class MyUntisApplication : Application() {
 
+    @Inject
+    lateinit var notifier: Notifier
+
     override fun onCreate() {
         super.onCreate()
-        // Application-level initialization goes here.
-        // Hilt is automatically initialized by @HiltAndroidApp.
-        // We can add logging setup, crash reporting, etc. here later.
+        // Erstellt die Notification Channels für Android 8+
+        notifier.ensureChannels()
     }
 }

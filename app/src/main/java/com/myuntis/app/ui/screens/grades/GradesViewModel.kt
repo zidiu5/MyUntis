@@ -17,6 +17,61 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import kotlin.math.ceil
+import kotlin.math.roundToInt
+
+// ── Simulation helpers ────────────────────────────────────────
+data class SimGrade(val label: String, val value: Float)
+
+sealed interface GoalResult {
+    data object Reached : GoalResult                                  // even the worst grade is enough
+    data class Impossible(val needed: Float) : GoalResult
+    data class Needed(val needed: Float, val label: String) : GoalResult
+}
+
+private const val MIN_GRADE = 4f
+
+/** "8" → 8, "8+" → 8.25, "8-" → 7.75, "7/8" → 7.5, "7,5" → 7.5. null = invalid. */
+fun parseGrade(text: String): Float? {
+    val s = text.trim().replace(',', '.')
+    if (s.isEmpty()) return null
+    val v: Float? = when {
+        '/' in s -> {
+            val p = s.split('/')
+            val a = p.getOrNull(0)?.toFloatOrNull()
+            val b = p.getOrNull(1)?.toFloatOrNull()
+            if (p.size == 2 && a != null && b != null) (a + b) / 2f else null
+        }
+        s.endsWith("+") -> s.dropLast(1).toFloatOrNull()?.plus(0.25f)
+        s.endsWith("-") -> s.dropLast(1).toFloatOrNull()?.minus(0.25f)
+        else -> s.toFloatOrNull()
+    }
+    return v?.takeIf { it in 1f..10f }
+}
+
+/** 8.25 → "8+", 8.5 → "8/9", 8.75 → "9-" */
+fun gradeLabel(v: Float): String {
+    val q = (v * 4f).roundToInt()
+    val whole = q / 4
+    return when (q % 4) {
+        0 -> "$whole"
+        1 -> "$whole+"
+        2 -> "$whole/${whole + 1}"
+        else -> "${whole + 1}-"
+    }
+}
+
+private fun ceilToQuarter(x: Float): Float = (ceil(x * 4f - 0.0001f) / 4f).coerceAtMost(10f)
+
+/** What the next [count] grades must average so that the subject average reaches [target]. */
+fun goalFor(current: List<Float>, target: Float, count: Int): GoalResult {
+    val needed = (target * (current.size + count) - current.sum()) / count
+    return when {
+        needed > 10.001f    -> GoalResult.Impossible(needed)
+        needed <= MIN_GRADE -> GoalResult.Reached
+        else                -> GoalResult.Needed(needed, gradeLabel(ceilToQuarter(needed)))
+    }
+}
 
 enum class GradesTab(val label: String) { GRADES("Register"), ABSENCES("Fehlstunden") }
 enum class StatsTab(val label: String) { REGISTER("Register"), ANALYSE("Analyse") }
@@ -33,28 +88,38 @@ data class GradesUiState(
     val absencesError: String? = null,
     val schoolYears: List<SchoolYearOption> = emptyList(),
     val selectedYearId: Int? = null,      // null = current school year
+    val sim: Map<Int, List<SimGrade>> = emptyMap(),     // lessonId → test grades
 ) {
-    // Average of ALL individual grades (Realwert)
+    val hasSim: Boolean get() = sim.values.any { it.isNotEmpty() }
+    val simCount: Int get() = sim.values.sumOf { it.size }
+
+    /** real grades + test grades of one subject */
+    fun gradesOf(subject: SubjectWithGrades): List<Float> =
+        subject.entries.map { it.markValue } + sim[subject.lessonId].orEmpty().map { it.value }
+
+    fun averageOf(subject: SubjectWithGrades): Float =
+        gradesOf(subject).let { if (it.isEmpty()) 0f else it.average().toFloat() }
+
+    // Average of ALL single grades (Realwert)
     val realwert: Float
         get() {
-            val all = subjects.flatMap { it.entries }.map { it.markValue }
+            val all = subjects.flatMap { gradesOf(it) }
             return if (all.isEmpty()) 0f else all.average().toFloat()
         }
 
     // Average of subject averages (Zeugnis)
     val zeugnisAvg: Float
         get() {
-            val avgs = subjects.filter { it.entries.isNotEmpty() }.map { it.average }
+            val avgs = subjects.map { gradesOf(it) }.filter { it.isNotEmpty() }.map { it.average() }
             return if (avgs.isEmpty()) 0f else avgs.average().toFloat()
         }
 
     // Grade distribution for donut chart (buckets for each integer 1-10)
     val gradeCounts: List<Pair<String, Int>>
         get() {
-            val all = subjects.flatMap { it.entries }
+            val all = subjects.flatMap { gradesOf(it) }
             return (4..10).map { bucket ->          // 4-10 only
-                val count = all.count { Math.round(it.markValue) == bucket }
-                bucket.toString() to count
+                bucket.toString() to all.count { Math.round(it) == bucket }
             }
         }
 }
@@ -114,7 +179,8 @@ class GradesViewModel @Inject constructor(
                 selectedYearId = yearId,
                 subjects = cached ?: emptyList(),
                 isLoadingGrades = cached == null,
-                gradesError = null
+                gradesError = null,
+                sim = emptyMap() // clear simulations on year switch
             )
         }
         loadGradesInternal(force = false)
@@ -175,4 +241,22 @@ class GradesViewModel @Inject constructor(
             it.copy(isLoadingAbsences = false, absences = list, absenceStats = stats, absencesError = null)
         }
     }
+
+    // ── Simulation ────────────────────────────────────────────────
+    /** false = the text is not a valid grade */
+    fun addSimGrade(lessonId: Int, text: String): Boolean {
+        val value = parseGrade(text) ?: return false
+        val grade = SimGrade(label = text.trim().replace(',', '.'), value = value)
+        _uiState.update { it.copy(sim = it.sim + (lessonId to (it.sim[lessonId].orEmpty() + grade))) }
+        return true
+    }
+
+    fun removeSimGrade(lessonId: Int, index: Int) {
+        _uiState.update { s ->
+            val list = s.sim[lessonId].orEmpty().filterIndexed { i, _ -> i != index }
+            s.copy(sim = if (list.isEmpty()) s.sim - lessonId else s.sim + (lessonId to list))
+        }
+    }
+
+    fun resetSim() = _uiState.update { it.copy(sim = emptyMap()) }
 }

@@ -8,11 +8,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -22,6 +21,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.myuntis.app.data.notifications.NavRequests
 import com.myuntis.app.ui.navigation.Screen
 import com.myuntis.app.ui.navigation.bottomNavItems
 import com.myuntis.app.ui.screens.dashboard.DashboardScreen
@@ -30,10 +30,6 @@ import com.myuntis.app.ui.screens.homework.HomeworkScreen
 import com.myuntis.app.ui.screens.messages.MessagesScreen
 import com.myuntis.app.ui.screens.settings.SettingsScreen
 import com.myuntis.app.ui.screens.timetable.TimetableScreen
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.unit.sp
 
 @Composable
 fun MainScreen(
@@ -50,7 +46,11 @@ fun MainScreen(
             onDispose { }
         } else {
             val observer = LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_START) mainViewModel.onAppResumed()
+                when (event) {
+                    Lifecycle.Event.ON_START -> mainViewModel.onAppResumed()
+                    Lifecycle.Event.ON_STOP  -> mainViewModel.onAppStopped()
+                    else -> {}
+                }
             }
             activity.lifecycle.addObserver(observer)
             onDispose { activity.lifecycle.removeObserver(observer) }
@@ -85,6 +85,15 @@ fun MainScreen(
         } else {
             // classreg, exams → handled by Root NavGraph
             onNavigate(route)
+        }
+    }
+
+    // A tapped notification asks to open a screen
+    val requestedRoute by NavRequests.route.collectAsState()
+    LaunchedEffect(requestedRoute) {
+        requestedRoute?.let {
+            smartNavigate(it)
+            NavRequests.consume()
         }
     }
 
@@ -133,9 +142,6 @@ fun MainScreen(
             exitTransition   = { fadeOut(tween(200)) }
         ) {
             composable(Screen.Dashboard.route) {
-                // Pass smartNavigate so Dashboard can reach ALL features:
-                // – bottom-nav items go through inner controller (no crash)
-                // – classreg / exams go through outer controller
                 DashboardScreen(onNavigate = smartNavigate)
             }
             composable(Screen.Timetable.route) { TimetableScreen() }

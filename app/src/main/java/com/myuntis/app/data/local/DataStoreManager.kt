@@ -6,6 +6,11 @@ import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.myuntis.app.data.local.dataStore
+import com.myuntis.app.data.network.model.BoardCache
+import com.myuntis.app.data.network.model.BoardSession
+import com.myuntis.app.data.notifications.NotifType
+import com.myuntis.app.data.notifications.NotificationSettings
 import com.myuntis.app.domain.model.SavedAccount
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -15,8 +20,6 @@ import kotlinx.coroutines.flow.map
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
-import com.myuntis.app.data.network.model.BoardCache
-import com.myuntis.app.data.network.model.BoardSession
 
 // =============================================================
 // DATASTORE MANAGER
@@ -59,7 +62,12 @@ class DataStoreManager @Inject constructor(
         val KEY_MENSA_CACHE  = stringPreferencesKey("mensa_cache_v1")
         val KEY_MENSA_VEG    = booleanPreferencesKey("mensa_vegetarian")
         val KEY_BOARD_SESSIONS = stringPreferencesKey("board_sessions_v1")
+        private val KEY_NOTIF_REMIND = intPreferencesKey("notif_remind_minutes")
+        private val KEY_NOTIF_STATUS = stringPreferencesKey("notif_status")
+
     }
+
+    private fun notifKey(type: NotifType) = booleanPreferencesKey("notif_${type.key}")
 
     // ----- READ OPERATIONS (Flow) -----
 
@@ -134,6 +142,24 @@ class DataStoreManager @Inject constructor(
     val mensaVegetarian: Flow<Boolean> = dataStore.data
         .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
         .map { it[KEY_MENSA_VEG] ?: false }
+
+    // ── Notifications ─────────────────────────────────────────────
+    val notificationSettings: Flow<NotificationSettings> = dataStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { p ->
+            NotificationSettings(
+                enabled = NotifType.entries.filter { p[notifKey(it)] == true }.toSet(),
+                reminderMinutes = p[KEY_NOTIF_REMIND] ?: (17 * 60)
+            )
+        }
+
+    val notifStatus: Flow<String> = dataStore.data
+        .catch { if (it is IOException) emit(emptyPreferences()) else throw it }
+        .map { it[KEY_NOTIF_STATUS] ?: "" }
+
+    suspend fun saveNotifStatus(text: String) {
+        dataStore.edit { it[KEY_NOTIF_STATUS] = text }
+    }
 
     suspend fun setSubjectColor(subjectShort: String, hexColor: String) {
         dataStore.edit { prefs ->
@@ -363,6 +389,35 @@ class DataStoreManager @Inject constructor(
             if (done) set.add(postId) else set.remove(postId)
             prefs[key] = set
         }
+    }
+
+    // ── Notifications ─────────────────────────────────────────────
+    suspend fun setNotifEnabled(type: NotifType, enabled: Boolean) {
+        dataStore.edit { prefs ->
+            prefs[notifKey(type)] = enabled
+            if (enabled) {
+                val prefix = "notif_seen_${type.key}_"
+                prefs.asMap().keys.filter { it.name.startsWith(prefix) }.forEach { prefs.remove(it) }
+            }
+        }
+    }
+
+    suspend fun setReminderMinutes(minutes: Int) {
+        dataStore.edit { it[KEY_NOTIF_REMIND] = minutes }
+    }
+
+    suspend fun getSeen(type: NotifType, accountId: String): Set<String>? =
+        dataStore.data.first()[stringSetPreferencesKey("notif_seen_${type.key}_$accountId")]
+
+    suspend fun saveSeen(type: NotifType, accountId: String, ids: Set<String>) {
+        dataStore.edit { it[stringSetPreferencesKey("notif_seen_${type.key}_$accountId")] = ids }
+    }
+
+    suspend fun getReminded(accountId: String): Set<String> =
+        dataStore.data.first()[stringSetPreferencesKey("notif_reminded_$accountId")] ?: emptySet()
+
+    suspend fun saveReminded(accountId: String, ids: Set<String>) {
+        dataStore.edit { it[stringSetPreferencesKey("notif_reminded_$accountId")] = ids }
     }
 }
 

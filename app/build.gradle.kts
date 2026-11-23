@@ -117,8 +117,6 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging.interceptor)
 
-    // Serialization removed (not used)
-
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 
@@ -133,6 +131,9 @@ dependencies {
 
     // Core
     implementation(libs.androidx.core.ktx)
+
+    // WorkManager für Benachrichtigungen (NEU)
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     // Testing
     testImplementation(libs.junit)
